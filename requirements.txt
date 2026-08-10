@@ -1,0 +1,7 @@
+streamlit
+pandas
+plotly
+streamlit-agraph
+openai
+requests
+pytest

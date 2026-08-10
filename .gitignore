@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.streamlit/secrets.toml
+.env
+
+# This is the public code repo -- real data belongs only in the private
+# VolleyData repo, never here, not even by accident.
+*.csv
+recruiting_kb_data.json
