@@ -30,7 +30,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
-from openai import APIConnectionError, APITimeoutError
+from openai import APIError
 
 from recruiting_tree import ALL_SKILL_GROUPS, KnowledgeTree, NodeKind, RECRUITING_COLUMN_SCHEMA
 from recruiting_operations import VALID_AGGS, VALID_COMPARISONS, pipeline_from_dicts, pipeline_to_dicts
@@ -56,10 +56,16 @@ def call_llm(system_prompt: str, user_message: str, max_tokens: int = 1536,
     to). Parsing that text into JSON is left to each caller, since the
     two features want slightly different schemas.
 
-    Raises LLMUnavailableError on a connection failure or a missing API
-    key. Any other exception (malformed response object, etc.)
-    propagates as-is -- only "can't reach Groq at all" gets the
-    special-cased exception type.
+    Raises LLMUnavailableError on a missing API key or ANY API-level
+    failure -- connection/timeout, rate limiting (429), a bad/deprecated
+    model name (404, see LLM_MODEL's own history), auth, or a transient
+    5xx -- openai.APIError is the common base for all of those. Callers
+    already treat LLMUnavailableError uniformly (fall back to the rule-
+    based parser, or show a clear "unreachable" message) -- a Groq-side
+    hiccup should degrade the SAME way regardless of which specific HTTP
+    status caused it, not crash the app with an uncaught SDK exception.
+    Only a genuinely unexpected failure (e.g. a malformed response
+    object once the call itself succeeded) propagates as-is.
     """
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
@@ -79,9 +85,9 @@ def call_llm(system_prompt: str, user_message: str, max_tokens: int = 1536,
             max_tokens=max_tokens,
             temperature=temperature,
         )
-    except (APIConnectionError, APITimeoutError) as e:
+    except APIError as e:
         raise LLMUnavailableError(
-            f"Couldn't reach Groq at {LLM_BASE_URL} ({e})"
+            f"Groq request failed ({type(e).__name__}): {e}"
         ) from e
 
     raw = response.choices[0].message.content.strip()
