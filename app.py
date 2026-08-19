@@ -19,7 +19,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -39,8 +39,8 @@ from recruiting_data_store import (
     GameInfo, get_games, load_game_df, save_committed_tree, load_committed_tree,
 )
 from recruiting_encoding import (
-    EncodingAssignment, default_encoding, reconcile_encoding, set_game_order,
-    slot_options, render as render_encoded_panels,
+    EncodingAssignment, default_encoding, reconcile_encoding, resolve_clicked_point,
+    set_game_order, slot_options, render as render_encoded_panels,
 )
 
 # Bridge Streamlit secrets into the environment before recruiting_llm.py
@@ -67,6 +67,15 @@ UMD_GOLD = "#B8860B"
 UMD_WHITE = "#FFFFFF"
 UMD_CYCLE = [UMD_RED, UMD_GOLD, UMD_WHITE]
 
+# A richer Maryland-flavored cycle for per-player chart colors -- more
+# entries than UMD_CYCLE since a roster can have well over 3 players and
+# each one needs a color that stays visually distinct from its neighbors
+# in the cycle, while still reading as "this app's palette" rather than
+# Plotly's generic default.
+UMD_PLAYER_PALETTE = [
+    UMD_RED, UMD_GOLD, "#8B0000", "#DAA520", UMD_WHITE, "#A9A9A9", "#FF6B6B", "#F0C300",
+]
+
 PLOTLY_BASE = dict(
     plot_bgcolor=UMD_BLACK, paper_bgcolor=UMD_BLACK,
     font=dict(family="sans-serif", color=UMD_WHITE),
@@ -74,6 +83,28 @@ PLOTLY_BASE = dict(
     xaxis=dict(color=UMD_WHITE, gridcolor="#333333"),
     yaxis=dict(color=UMD_WHITE, gridcolor="#333333"),
 )
+
+# Small Maryland-themed chrome: a red accent under headers/subheaders and
+# a gold-tinted divider, instead of Streamlit's default plain-gray look --
+# purely cosmetic, doesn't touch any widget behavior.
+st.markdown(f"""
+<style>
+h1, h2, h3 {{ border-bottom: 2px solid {UMD_RED}; padding-bottom: 0.2em; }}
+hr {{ border-top: 1px solid {UMD_GOLD}; }}
+</style>
+""", unsafe_allow_html=True)
+
+
+def get_player_color_map(known_player_pool: List[str]) -> dict:
+    """Deterministic Player -> color assignment (sorted names, cycled
+    through UMD_PLAYER_PALETTE) so the SAME player gets the SAME color on
+    every chart/panel and matches the color key -- never re-picked per
+    figure, which would make "red = Sloan" true in one chart and false in
+    the next."""
+    return {
+        player: UMD_PLAYER_PALETTE[i % len(UMD_PLAYER_PALETTE)]
+        for i, player in enumerate(sorted(known_player_pool))
+    }
 
 QA_SAMPLE_QUESTIONS = [
     "What is Sloan's Kills Per Set in the Vegas Aces game?",
@@ -579,8 +610,17 @@ def get_metric_format_pattern(tree: KnowledgeTree, metric_label: str) -> str:
     return "{:.2f}"
 
 
-def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree, highlight: Optional[str] = None):
-    """Applies semantic formatting, clean dash fills for missing values, and row highlights."""
+def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree,
+                       highlight: Optional[Dict[str, Optional[str]]] = None):
+    """Applies semantic formatting, clean dash fills for missing values,
+    and brushing-and-linking highlight: the SPECIFIC (Player, Game,
+    Metric) cell the highlight names gets a bold gold fill (this is the
+    exact thing that was clicked, in the chart or elsewhere), the rest
+    of that same row gets a lighter red tint (this is what it belongs
+    to), and non-matching rows are untouched."""
+    highlight = highlight or {}
+    hl_player, hl_game, hl_metric = highlight.get("player"), highlight.get("game"), highlight.get("metric")
+
     format_dict = {}
     for col in df.columns:
         if col in ["Player", "Game"]:
@@ -588,8 +628,20 @@ def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree, highlight: Optional
         format_dict[col] = get_metric_format_pattern(tree, str(col))
 
     def _row_style(row):
-        hit = highlight and (row.get("Player") == highlight or row.get("Game") == highlight)
-        return [f"background-color: {UMD_GOLD}; color: {UMD_BLACK}; font-weight: bold;" if hit else "" for _ in row]
+        row_hit = (
+            (hl_player is not None or hl_game is not None)
+            and (hl_player is None or row.get("Player") == hl_player)
+            and (hl_game is None or row.get("Game") == hl_game)
+        )
+        styles = []
+        for col in row.index:
+            if row_hit and hl_metric is not None and col == hl_metric:
+                styles.append(f"background-color: {UMD_GOLD}; color: {UMD_BLACK}; font-weight: bold; border: 2px solid {UMD_RED};")
+            elif row_hit:
+                styles.append(f"background-color: {UMD_RED}; color: {UMD_WHITE};")
+            else:
+                styles.append("")
+        return styles
 
     return df.style.format(format_dict, na_rep="—").apply(_row_style, axis=1)
 
@@ -659,6 +711,19 @@ def reset_wizard() -> None:
     st.session_state.new_metric_step = "describe"
     st.session_state.new_metric_worked_example = None
     st.session_state.pop("review_parser_note", None)
+
+
+def _update_highlight_if_changed(new_highlight: Dict[str, Optional[str]]) -> None:
+    """Updates the shared brushing-and-linking selection and immediately
+    reruns if it actually changed. Without the explicit rerun, a click's
+    effect wouldn't show up until a SECOND interaction: the click that
+    sets it already triggered Streamlit's own on_select rerun, but that
+    happened BEFORE this function runs, so without rerunning again here
+    the CURRENT script pass still builds the table/charts using the
+    stale highlight."""
+    if new_highlight != st.session_state.qa_highlight:
+        st.session_state.qa_highlight = new_highlight
+        st.rerun()
 
 
 def render_dependents(dependents) -> None:
@@ -830,20 +895,6 @@ def render_tree_graph(tree: KnowledgeTree, known_games: List[GameInfo]) -> None:
     render_node_panel(tree, st.session_state.selected_node_id, worked_example_df)
 
 
-def extract_click_highlight(chart_click_key: str) -> Optional[str]:
-    click_state = st.session_state.get(chart_click_key)
-    if not click_state:
-        return None
-    points = (click_state.get("selection") or {}).get("points") or []
-    if not points:
-        return None
-    pt = points[0]
-    value = pt.get("customdata")
-    if isinstance(value, list):
-        value = value[0] if value else None
-    return value if value is not None else pt.get("x")
-
-
 # ──────────────────────────────────────────────────────────────
 # SESSION INITIALIZATION
 # ──────────────────────────────────────────────────────────────
@@ -875,6 +926,12 @@ if "tree" not in st.session_state:
     st.session_state.qa_trigger = False
     st.session_state.qa_last_decomposition = None
     st.session_state.qa_action_results = []
+    st.session_state.qa_encodings = {}
+    # Brushing-and-linking selection, shared between the consolidated
+    # table and every chart panel: click a metric cell in the table, or a
+    # bar in a chart, and this fills in with {"player","game","metric"}
+    # (any of which can be None) so both sides highlight the same thing.
+    st.session_state.qa_highlight = {"player": None, "game": None, "metric": None}
     st.session_state.expanded_branches = set()
     st.session_state.last_graph_click = None
     st.session_state.selected_node_id = None
@@ -1116,6 +1173,11 @@ with tab_qa:
             # would silently inherit whatever manual position/color/facet
             # override was left over from the PREVIOUS question's action 0.
             st.session_state.qa_encodings = {}
+            # Same reasoning for the brushing selection -- a stale
+            # highlight from the last question shouldn't light up a
+            # coincidentally-matching player/game/metric in a brand new
+            # result set.
+            st.session_state.qa_highlight = {"player": None, "game": None, "metric": None}
 
     decomposition = st.session_state.qa_last_decomposition
     action_results = st.session_state.qa_action_results
@@ -1133,13 +1195,37 @@ with tab_qa:
         consolidated_df = consolidate_action_results(valid_action_results)
 
         if not consolidated_df.empty:
-            chart_click_key = "qa_global_chart_click"
-            highlight = extract_click_highlight(chart_click_key)
-            formatted_table = format_tidy_table(consolidated_df, tree, highlight=highlight)
-            st.dataframe(formatted_table, use_container_width=True, hide_index=True)
+            # Brushing: a metric CELL clicked here updates qa_highlight,
+            # which both this table's own styling AND every chart panel
+            # below read from -- click a bar in a chart instead and the
+            # SAME state updates the other way (see the chart loop).
+            # Reads the PREVIOUS run's selection (Streamlit populates the
+            # widget's session_state key before the script body runs
+            # again), so a click this table just registered is already
+            # reflected by the time execution reaches here.
+            table_click_state = st.session_state.get("qa_table_select")
+            if table_click_state:
+                cells = (table_click_state.get("selection") or {}).get("cells") or []
+                if cells:
+                    row_idx, col_name = cells[0]
+                    if col_name not in ("Player", "Game") and row_idx < len(consolidated_df):
+                        clicked_row = consolidated_df.iloc[row_idx]
+                        _update_highlight_if_changed({
+                            "player": clicked_row.get("Player"),
+                            "game": clicked_row.get("Game"),
+                            "metric": col_name,
+                        })
 
-            if highlight:
-                st.caption(f"🔗 Linked selection: **{highlight}**")
+            highlight = st.session_state.qa_highlight
+            formatted_table = format_tidy_table(consolidated_df, tree, highlight=highlight)
+            st.dataframe(
+                formatted_table, use_container_width=True, hide_index=True,
+                on_select="rerun", selection_mode=["single-cell"], key="qa_table_select",
+            )
+
+            if highlight.get("player") or highlight.get("game"):
+                parts = [v for v in (highlight.get("player"), highlight.get("game"), highlight.get("metric")) if v]
+                st.caption(f"🔗 Linked selection: **{' / '.join(parts)}**")
 
             with st.expander("💡 Table Provenance & Metric Contracts"):
                 st.markdown("This view consolidates data computed from the **Committed Knowledge Base**: ")
@@ -1239,97 +1325,139 @@ with tab_qa:
         # qa_encodings = {} reset alongside qa_action_results above) --
         # so switching questions never carries over a stale override, but
         # tweaking the dropdowns below persists across reruns of the SAME
-        # question. NOTE: this replaces the old click-to-highlight chart
-        # interaction -- a faceted multi-panel result doesn't have one
-        # obvious "which panel was clicked" answer, so charts here are
-        # adjustable via the dropdowns but no longer clickable-to-highlight
-        # the table above.
+        # question. Clicking a bar highlights the matching table cell (and
+        # vice versa) via the shared qa_highlight state -- see
+        # _update_highlight_if_changed and the table section above.
         if valid_action_results:
             with st.expander("📈 Interactive Visualizations", expanded=True):
                 qa_encodings = st.session_state.qa_encodings
-                for i, item in enumerate(valid_action_results):
-                    action = item["action"]
-                    title = action.get("title") or action.get("metric_of_interest") or action.get("skill_group") or f"Chart {i + 1}"
-                    result_df = item["result_df"]
+                highlight = st.session_state.qa_highlight
+                player_color_map = get_player_color_map(known_player_pool)
 
-                    # Routing-inspection moment for the pipeline itself (same
-                    # spirit as the "LLM Router Decomposition" expander below):
-                    # show what was actually computed before the coach trusts
-                    # the number, and surface any note from fetching/running
-                    # it (e.g. an unresolvable cross-metric predicate, or a
-                    # pipeline step that emptied the result) even when that
-                    # means the chart itself gets skipped just after this.
-                    if item.get("pipeline"):
-                        st.caption(f"🔧 Pipeline: {describe_pipeline(item['pipeline'])}")
-                    for note in item.get("pipeline_notes", []):
-                        st.warning(note)
-
-                    if result_df.empty or result_df["Value"].notna().sum() == 0:
-                        continue
-
-                    st.markdown(f"**{title}**")
-                    encoding = qa_encodings.get(i) or default_encoding(result_df)
-                    options = slot_options(result_df)
-
-                    def _fmt(axis):
-                        return axis or "(none)"
-
-                    col_pos, col_color, col_facet = st.columns(3)
-                    with col_pos:
-                        chosen_position = st.selectbox(
-                            "Group by", options, index=options.index(encoding.position),
-                            format_func=_fmt, key=f"qa_enc_position_{i}",
-                        )
-                    with col_color:
-                        chosen_color = st.selectbox(
-                            "Color by", options, index=options.index(encoding.color),
-                            format_func=_fmt, key=f"qa_enc_color_{i}",
-                        )
-                    with col_facet:
-                        chosen_facet = st.selectbox(
-                            "Split into panels by", options, index=options.index(encoding.facet),
-                            format_func=_fmt, key=f"qa_enc_facet_{i}",
+                col_charts, col_key = st.columns([5, 1])
+                with col_key:
+                    st.markdown("**Player Key**")
+                    for player in sorted(player_color_map):
+                        swatch = player_color_map[player]
+                        st.markdown(
+                            f'<div style="display:flex;align-items:center;margin-bottom:4px;">'
+                            f'<span style="display:inline-block;width:14px;height:14px;'
+                            f'background-color:{swatch};border:1px solid {UMD_WHITE};margin-right:6px;">'
+                            f'</span><span style="font-size:0.85em;color:{UMD_WHITE};">{player}</span></div>',
+                            unsafe_allow_html=True,
                         )
 
-                    if chosen_position != encoding.position:
-                        encoding = reconcile_encoding(encoding, "position", chosen_position)
-                    if chosen_color != encoding.color:
-                        encoding = reconcile_encoding(encoding, "color", chosen_color)
-                    if chosen_facet != encoding.facet:
-                        encoding = reconcile_encoding(encoding, "facet", chosen_facet)
+                with col_charts:
+                    for i, item in enumerate(valid_action_results):
+                        action = item["action"]
+                        title = action.get("title") or action.get("metric_of_interest") or action.get("skill_group") or f"Chart {i + 1}"
+                        result_df = item["result_df"]
 
-                    if encoding.position == "Game":
-                        order_labels = ["value", "original"]
-                        chosen_order = st.radio(
-                            "Game order", order_labels, index=order_labels.index(encoding.game_order),
-                            horizontal=True, key=f"qa_enc_gameorder_{i}",
-                            format_func=lambda o: "By value" if o == "value" else "Original order",
+                        # Routing-inspection moment for the pipeline itself (same
+                        # spirit as the "LLM Router Decomposition" expander below):
+                        # show what was actually computed before the coach trusts
+                        # the number, and surface any note from fetching/running
+                        # it (e.g. an unresolvable cross-metric predicate, or a
+                        # pipeline step that emptied the result) even when that
+                        # means the chart itself gets skipped just after this.
+                        if item.get("pipeline"):
+                            st.caption(f"🔧 Pipeline: {describe_pipeline(item['pipeline'])}")
+                        for note in item.get("pipeline_notes", []):
+                            st.warning(note)
+
+                        if result_df.empty or result_df["Value"].notna().sum() == 0:
+                            continue
+
+                        st.markdown(f"**{title}**")
+                        encoding = qa_encodings.get(i) or default_encoding(result_df)
+                        options = slot_options(result_df)
+
+                        def _fmt(axis):
+                            return axis or "(none)"
+
+                        col_pos, col_color, col_facet = st.columns(3)
+                        with col_pos:
+                            chosen_position = st.selectbox(
+                                "Group by", options, index=options.index(encoding.position),
+                                format_func=_fmt, key=f"qa_enc_position_{i}",
+                            )
+                        with col_color:
+                            chosen_color = st.selectbox(
+                                "Color by", options, index=options.index(encoding.color),
+                                format_func=_fmt, key=f"qa_enc_color_{i}",
+                            )
+                        with col_facet:
+                            chosen_facet = st.selectbox(
+                                "Split into panels by", options, index=options.index(encoding.facet),
+                                format_func=_fmt, key=f"qa_enc_facet_{i}",
+                            )
+
+                        if chosen_position != encoding.position:
+                            encoding = reconcile_encoding(encoding, "position", chosen_position)
+                        if chosen_color != encoding.color:
+                            encoding = reconcile_encoding(encoding, "color", chosen_color)
+                        if chosen_facet != encoding.facet:
+                            encoding = reconcile_encoding(encoding, "facet", chosen_facet)
+
+                        if encoding.position == "Game":
+                            order_labels = ["value", "original"]
+                            chosen_order = st.radio(
+                                "Game order", order_labels, index=order_labels.index(encoding.game_order),
+                                horizontal=True, key=f"qa_enc_gameorder_{i}",
+                                format_func=lambda o: "By value" if o == "value" else "Original order",
+                            )
+                            if chosen_order != encoding.game_order:
+                                encoding = set_game_order(encoding, chosen_order)
+
+                        qa_encodings[i] = encoding
+                        action_metric = action.get("metric_of_interest")
+
+                        panels = render_encoded_panels(
+                            result_df, encoding, value_col="Value",
+                            color_map=player_color_map, highlight=highlight,
                         )
-                        if chosen_order != encoding.game_order:
-                            encoding = set_game_order(encoding, chosen_order)
+                        if not panels:
+                            st.info("No computable values for this chart.")
+                            continue
 
-                    qa_encodings[i] = encoding
-
-                    panels = render_encoded_panels(result_df, encoding, value_col="Value")
-                    if not panels:
-                        st.info("No computable values for this chart.")
-                    elif len(panels) == 1:
-                        _, fig = panels[0]
-                        fig.update_layout(**PLOTLY_BASE, title=title)
-                        st.plotly_chart(fig, use_container_width=True, key=f"qa_chart_{i}")
-                    else:
                         # 2 panels per row, wrapping to a new row underneath
                         # rather than squeezing every panel into one row --
                         # a facet with several values stays readable instead
-                        # of each panel shrinking as more get added.
-                        panels_per_row = 2
+                        # of each panel shrinking as more get added. A single
+                        # panel is just a "row" of 1.
+                        panels_per_row = 2 if len(panels) > 1 else 1
                         for row_start in range(0, len(panels), panels_per_row):
                             row_panels = panels[row_start:row_start + panels_per_row]
                             row_cols = st.columns(panels_per_row)
                             for col, (panel_title, fig) in zip(row_cols, row_panels):
-                                fig.update_layout(**PLOTLY_BASE, title=f"{title} — {panel_title}")
+                                panel_key = f"qa_chart_{i}" if len(panels) == 1 else f"qa_chart_{i}_{panel_title}"
+                                # panel_metric: the facet value IS the metric
+                                # when faceted by Metric; otherwise this whole
+                                # panel already is the action's one metric.
+                                panel_metric = panel_title if encoding.facet == "Metric" else action_metric
+
+                                # Brushing, other direction: a bar clicked in a
+                                # PRIOR run is reflected in this key's session
+                                # state before this run's widget call even
+                                # happens (same "read before re-creating the
+                                # widget" idiom as the table's click handling
+                                # above) -- resolve it against THIS run's figure
+                                # (same data/encoding, so the trace layout
+                                # matches) and update the shared highlight.
+                                prior_click = st.session_state.get(panel_key)
+                                if prior_click:
+                                    points = (prior_click.get("selection") or {}).get("points") or []
+                                    clicked = resolve_clicked_point(points, encoding, fig, panel_metric)
+                                    if clicked:
+                                        _update_highlight_if_changed(clicked)
+
+                                panel_title_display = title if len(panels) == 1 else f"{title} — {panel_title}"
+                                fig.update_layout(**PLOTLY_BASE, title=panel_title_display, showlegend=False)
                                 with col:
-                                    st.plotly_chart(fig, use_container_width=True, key=f"qa_chart_{i}_{panel_title}")
+                                    st.plotly_chart(
+                                        fig, use_container_width=True, key=panel_key,
+                                        on_select="rerun", selection_mode=["points"],
+                                    )
 
         # ── 4. ROUTING DETAILS ──
         with st.expander("⚙️ LLM Router Decomposition"):
