@@ -43,11 +43,12 @@ from recruiting_tree import KnowledgeTree
 # not on local disk -- app.load_committed_tree() needs live GITHUB_DATA_REPO/
 # GITHUB_DATA_TOKEN secrets and network access to reach it, neither of which
 # CI/offline test runs can guarantee. This points at the local staging copy
-# (see VolleyData_upload/ one level up, the same file that gets uploaded to
-# VolleyData by hand) so real_tree below still exercises the genuine
-# committed data, just read straight from disk instead of over the network.
+# (see VolleyData_upload/ alongside this file, the same file that gets
+# uploaded to VolleyData by hand) so real_tree below still exercises the
+# genuine committed data, just read straight from disk instead of over the
+# network.
 _STAGED_TREE_JSON = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "VolleyData_upload", "recruiting_kb_data.json",
+    os.path.dirname(os.path.abspath(__file__)), "VolleyData_upload", "recruiting_kb_data.json",
 )
 
 

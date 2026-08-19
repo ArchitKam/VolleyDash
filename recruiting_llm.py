@@ -36,7 +36,7 @@ from recruiting_tree import ALL_SKILL_GROUPS, KnowledgeTree, NodeKind, RECRUITIN
 from recruiting_operations import VALID_AGGS, VALID_COMPARISONS, pipeline_from_dicts
 
 LLM_BASE_URL = "https://api.groq.com/openai/v1"
-LLM_MODEL = "llama-3.1-8b-instant"
+LLM_MODEL = "openai/gpt-oss-20b"
 
 
 class LLMUnavailableError(Exception):
