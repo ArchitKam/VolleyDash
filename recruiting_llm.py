@@ -30,13 +30,18 @@ import re
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
-from openai import APIError
+from openai import APIError, NotFoundError, RateLimitError
 
 from recruiting_tree import ALL_SKILL_GROUPS, KnowledgeTree, NodeKind, RECRUITING_COLUMN_SCHEMA
 from recruiting_operations import VALID_AGGS, VALID_COMPARISONS, pipeline_from_dicts, pipeline_to_dicts
 
 LLM_BASE_URL = "https://api.groq.com/openai/v1"
 LLM_MODEL = "openai/gpt-oss-20b"
+# Tried in order if LLM_MODEL itself is rate-limited or unavailable (404,
+# e.g. deprecated) -- Groq tracks rate limits PER MODEL, so a model that's
+# hit its own daily/per-minute cap doesn't mean every model has. Same
+# family/size tier as LLM_MODEL, so JSON-output behavior should be similar.
+LLM_FALLBACK_MODELS = ["openai/gpt-oss-120b"]
 
 
 class LLMUnavailableError(Exception):
@@ -56,16 +61,22 @@ def call_llm(system_prompt: str, user_message: str, max_tokens: int = 1536,
     to). Parsing that text into JSON is left to each caller, since the
     two features want slightly different schemas.
 
-    Raises LLMUnavailableError on a missing API key or ANY API-level
-    failure -- connection/timeout, rate limiting (429), a bad/deprecated
-    model name (404, see LLM_MODEL's own history), auth, or a transient
-    5xx -- openai.APIError is the common base for all of those. Callers
-    already treat LLMUnavailableError uniformly (fall back to the rule-
-    based parser, or show a clear "unreachable" message) -- a Groq-side
-    hiccup should degrade the SAME way regardless of which specific HTTP
-    status caused it, not crash the app with an uncaught SDK exception.
-    Only a genuinely unexpected failure (e.g. a malformed response
-    object once the call itself succeeded) propagates as-is.
+    Tries LLM_MODEL first, falling back to each of LLM_FALLBACK_MODELS in
+    order ONLY on RateLimitError/NotFoundError (this specific model is
+    rate-limited or unavailable -- a different model has its own,
+    separate quota and may well still work). Any other APIError
+    (connection/timeout, auth, a transient 5xx) fails immediately without
+    trying the fallbacks, since those affect Groq/the account as a whole,
+    not just one model -- retrying a different model wouldn't help.
+
+    Raises LLMUnavailableError on a missing API key, or once every model
+    in the chain has been tried and failed. Callers already treat
+    LLMUnavailableError uniformly (fall back to the rule-based parser, or
+    show a clear "unreachable" message) -- a Groq-side hiccup should
+    degrade the SAME way regardless of which specific failure caused it,
+    not crash the app with an uncaught SDK exception. Only a genuinely
+    unexpected failure (e.g. a malformed response object once a call
+    actually succeeded) propagates as-is.
     """
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
@@ -75,20 +86,34 @@ def call_llm(system_prompt: str, user_message: str, max_tokens: int = 1536,
         )
 
     client = OpenAI(base_url=LLM_BASE_URL, api_key=api_key)
-    try:
-        response = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    except APIError as e:
+    models_to_try = [LLM_MODEL] + [m for m in LLM_FALLBACK_MODELS if m != LLM_MODEL]
+
+    response = None
+    last_error: Optional[Exception] = None
+    for model in models_to_try:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            break
+        except (RateLimitError, NotFoundError) as e:
+            last_error = e
+            continue
+        except APIError as e:
+            raise LLMUnavailableError(
+                f"Groq request failed ({type(e).__name__}): {e}"
+            ) from e
+
+    if response is None:
         raise LLMUnavailableError(
-            f"Groq request failed ({type(e).__name__}): {e}"
-        ) from e
+            f"Groq request failed on every configured model ({', '.join(models_to_try)}): {last_error}"
+        )
 
     raw = response.choices[0].message.content.strip()
     if raw.startswith("```"):

@@ -1,8 +1,8 @@
 import pandas as pd
 
 from recruiting_encoding import (
-    EncodingAssignment, default_encoding, reconcile_encoding, set_game_order,
-    slot_options, varying_axes,
+    EncodingAssignment, default_encoding, reconcile_encoding, render,
+    resolve_clicked_point, set_game_order, slot_options, varying_axes,
 )
 
 
@@ -167,3 +167,111 @@ def test_slot_options_includes_none_plus_varying_axes():
         {"Player": "Sloan", "Game": "Mavs 816", "Value": 8},
     ])
     assert slot_options(df) == [None, "Game"]
+
+
+# ──────────────────────────────────────────────────────────────
+# render() -- color_map (consistent colors) and highlight (brushing)
+# ──────────────────────────────────────────────────────────────
+
+def _comparison_df():
+    return _df([
+        {"Player": "Sloan", "Game": "Vegas Aces", "Value": 12},
+        {"Player": "Sloan", "Game": "Mavs 816", "Value": 8},
+        {"Player": "Kendal", "Game": "Vegas Aces", "Value": 5},
+        {"Player": "Kendal", "Game": "Mavs 816", "Value": 7},
+    ])
+
+
+def test_render_applies_color_map_per_trace():
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player")
+    color_map = {"Sloan": "#E21833", "Kendal": "#B8860B"}
+    _, fig = render(df, enc, color_map=color_map)[0]
+    by_name = {trace.name: trace.marker.color for trace in fig.data}
+    assert by_name == {"Sloan": "#E21833", "Kendal": "#B8860B"}
+
+
+def test_render_highlight_outlines_only_the_matching_bar():
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player")
+    highlight = {"player": "Sloan", "game": "Vegas Aces", "metric": None}
+    _, fig = render(df, enc, highlight=highlight)[0]
+
+    sloan_trace = next(t for t in fig.data if t.name == "Sloan")
+    kendal_trace = next(t for t in fig.data if t.name == "Kendal")
+
+    # Sloan's trace: Vegas Aces (index 0) gets the outline, Mavs 816 doesn't.
+    assert list(sloan_trace.x) == ["Vegas Aces", "Mavs 816"]
+    assert sloan_trace.marker.line.width == (4, 0)
+
+    # Kendal's trace never matched the highlighted player at all --
+    # untouched (None), not even a zero-width array.
+    assert kendal_trace.marker.line.width is None
+
+
+def test_render_highlight_only_applies_to_the_matching_facet_panel():
+    rows = []
+    for player in ("Sloan", "Kendal"):
+        for game in ("Vegas Aces", "Mavs 816"):
+            for metric in ("Kills Per Set", "Aces Per Set"):
+                rows.append({"Player": player, "Game": game, "Metric": metric, "Value": 1})
+    df = _df(rows)
+    enc = EncodingAssignment(position="Game", color="Player", facet="Metric")
+    highlight = {"player": "Sloan", "game": "Vegas Aces", "metric": "Kills Per Set"}
+
+    panels = render(df, enc, highlight=highlight)
+    by_title = dict(panels)
+    assert set(by_title) == {"Aces Per Set", "Kills Per Set"}
+
+    kills_sloan_trace = next(t for t in by_title["Kills Per Set"].data if t.name == "Sloan")
+    assert kills_sloan_trace.marker.line.width == (4, 0)
+
+    # The OTHER metric's panel must not light up just because it shares
+    # the same player/game -- the highlight is scoped to its own metric.
+    for trace in by_title["Aces Per Set"].data:
+        assert trace.marker.line.width is None
+
+
+def test_render_no_highlight_leaves_figures_plain():
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player")
+    _, fig = render(df, enc)[0]
+    for trace in fig.data:
+        assert trace.marker.line.width is None
+
+
+# ──────────────────────────────────────────────────────────────
+# resolve_clicked_point -- click a bar, get back {player, game, metric}
+# ──────────────────────────────────────────────────────────────
+
+def test_resolve_clicked_point_maps_color_and_position_to_correct_keys():
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player")
+    _, fig = render(df, enc)[0]
+
+    # Simulate clicking the Sloan trace's "Vegas Aces" bar.
+    curve_number = next(i for i, t in enumerate(fig.data) if t.name == "Sloan")
+    points = [{"curve_number": curve_number, "x": "Vegas Aces", "y": 12}]
+
+    result = resolve_clicked_point(points, enc, fig, panel_metric="Kills Per Set")
+    assert result == {"player": "Sloan", "game": "Vegas Aces", "metric": "Kills Per Set"}
+
+
+def test_resolve_clicked_point_returns_none_for_empty_points():
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player")
+    _, fig = render(df, enc)[0]
+    assert resolve_clicked_point([], enc, fig, panel_metric="Kills Per Set") is None
+
+
+def test_resolve_clicked_point_uses_panel_metric_when_metric_not_an_axis():
+    # Neither position nor color is "Metric" here -- the panel's own
+    # metric (passed in by the caller, since this action/panel already
+    # IS one specific metric) fills that key instead of being left None.
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player")
+    _, fig = render(df, enc)[0]
+    curve_number = next(i for i, t in enumerate(fig.data) if t.name == "Kendal")
+    points = [{"curve_number": curve_number, "x": "Mavs 816", "y": 7}]
+    result = resolve_clicked_point(points, enc, fig, panel_metric="Aces Per Set")
+    assert result["metric"] == "Aces Per Set"
