@@ -526,10 +526,28 @@ def consolidate_action_results(action_results: List[dict]) -> pd.DataFrame:
 
     consolidated = wide_frames[0]
     for next_frame in wide_frames[1:]:
-        metric_cols = [c for c in next_frame.columns if c not in ["Player", "Game"]]
-        cols_to_use = ["Player", "Game"] + [c for c in metric_cols if c not in consolidated.columns]
-        if len(cols_to_use) > 2:
-            consolidated = pd.merge(consolidated, next_frame[cols_to_use], on=["Player", "Game"], how="outer")
+        metric_cols = [c for c in next_frame.columns if c not in ("Player", "Game")]
+        shared_cols = [c for c in metric_cols if c in consolidated.columns]
+        new_cols = [c for c in metric_cols if c not in consolidated.columns]
+
+        # Always merge, even when there's no NEW metric column -- two
+        # actions for the SAME metric but different players (e.g. the
+        # router split "Sloan's and Kendal's kills per set" and it didn't
+        # get merged back into one action upstream) still need their ROWS
+        # combined, not just their columns. A shared column name gets a
+        # "_dup" suffix from the merge, then combine_first folds it back
+        # into the original column (first non-null wins) instead of a
+        # second copy silently overwriting or vanishing.
+        merge_cols = ["Player", "Game"] + shared_cols + new_cols
+        consolidated = pd.merge(
+            consolidated, next_frame[merge_cols], on=["Player", "Game"],
+            how="outer", suffixes=("", "_dup"),
+        )
+        for col in shared_cols:
+            dup_col = f"{col}_dup"
+            if dup_col in consolidated.columns:
+                consolidated[col] = consolidated[col].combine_first(consolidated[dup_col])
+                consolidated = consolidated.drop(columns=[dup_col])
 
     return consolidated.sort_values(["Player", "Game"], kind="stable").reset_index(drop=True)
 

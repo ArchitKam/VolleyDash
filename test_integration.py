@@ -595,6 +595,36 @@ def test_merge_end_to_end_through_real_repair_and_execution(real_tree, synthetic
     assert set(df["Player"]) == {"#7 Sloan T.", "#22 Azana S."}
 
 
+def test_consolidate_action_results_keeps_both_players_for_same_metric():
+    """Regression guard for a real bug: two actions for the SAME metric
+    but different players (e.g. the router split a comparison question
+    and merge_same_shape_actions didn't fire for some reason -- the two
+    are meant to be equivalent paths to the same table) used to have the
+    second player's rows silently dropped, because the old merge-by-
+    column logic skipped the pd.merge entirely whenever there was no
+    NEW column name to add."""
+    action_results = [
+        {
+            "action": {"metric_of_interest": "Kills Per Set"},
+            "result_df": pd.DataFrame([
+                {"Game": "Vegas Aces", "Player": "#7 Sloan T.", "Value": 4.0, "Note": ""},
+                {"Game": "Mavs 816", "Player": "#7 Sloan T.", "Value": 3.0, "Note": ""},
+            ]),
+        },
+        {
+            "action": {"metric_of_interest": "Kills Per Set"},
+            "result_df": pd.DataFrame([
+                {"Game": "Vegas Aces", "Player": "#14 Kendal L.", "Value": 2.0, "Note": ""},
+                {"Game": "Mavs 816", "Player": "#14 Kendal L.", "Value": 5.0, "Note": ""},
+            ]),
+        },
+    ]
+    consolidated = app.consolidate_action_results(action_results)
+    assert set(consolidated["Player"]) == {"#7 Sloan T.", "#14 Kendal L."}
+    assert len(consolidated) == 4  # 2 players x 2 games, nobody dropped
+    assert list(consolidated.columns) == ["Player", "Game", "Kills Per Set"]
+
+
 # ──────────────────────────────────────────────────────────────
 # 10. JSON persistence untouched -- regression guard per the task's own
 #     instruction to treat any breakage here as cross-layer leakage.

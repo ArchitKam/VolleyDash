@@ -11,7 +11,9 @@ def _df(rows):
 
 
 # ──────────────────────────────────────────────────────────────
-# default_encoding -- 0/1/2/3 varying axes
+# default_encoding -- fixed mapping (Game -> position, Player -> color,
+# Metric -> facet), applied uniformly regardless of cardinality; an axis
+# that doesn't vary in this particular result just isn't assigned.
 # ──────────────────────────────────────────────────────────────
 
 def test_zero_varying_axes_single_player_single_game():
@@ -35,19 +37,33 @@ def test_one_varying_axis_game_only():
 
 def test_one_varying_axis_player_only_no_game_column():
     # A plain single-metric, single-game query's frame has no Metric
-    # column at all -- Player is the only varying axis here.
+    # column at all -- Player is the only varying axis here. Game isn't
+    # even present, so it can't take position -- Player has nowhere to
+    # go but color, even alone.
     df = _df([
         {"Player": "Sloan", "Value": 12},
         {"Player": "Azana", "Value": 9},
     ])
     assert varying_axes(df) == ["Player"]
     enc = default_encoding(df)
-    assert enc.position == "Player"
-    assert enc.color is None
+    assert enc.position is None
+    assert enc.color == "Player"
     assert enc.facet is None
 
 
-def test_two_varying_axes_player_and_game_game_takes_position():
+def test_one_varying_axis_metric_only():
+    df = _df([
+        {"Player": "Sloan", "Metric": "Kills", "Value": 12},
+        {"Player": "Sloan", "Metric": "Aces", "Value": 2},
+    ])
+    assert varying_axes(df) == ["Metric"]
+    enc = default_encoding(df)
+    assert enc.position is None
+    assert enc.color is None
+    assert enc.facet == "Metric"
+
+
+def test_two_varying_axes_player_and_game_fixed_roles():
     df = _df([
         {"Player": "Sloan", "Game": "Vegas Aces", "Value": 12},
         {"Player": "Sloan", "Game": "Mavs 816", "Value": 8},
@@ -61,9 +77,9 @@ def test_two_varying_axes_player_and_game_game_takes_position():
     assert enc.facet is None
 
 
-def test_two_varying_axes_player_and_metric_larger_cardinality_takes_position():
-    # No Game column varying (or present) here -- among Player (2 values)
-    # and Metric (3 values), Metric has the larger cardinality.
+def test_two_varying_axes_player_and_metric_no_game_present():
+    # Game isn't even a column here -- Metric still goes to facet, Player
+    # still goes to color, regardless of either's cardinality.
     rows = []
     for player in ("Sloan", "Azana"):
         for metric in ("Kills", "Aces", "Digs"):
@@ -71,28 +87,12 @@ def test_two_varying_axes_player_and_metric_larger_cardinality_takes_position():
     df = _df(rows)
     assert set(varying_axes(df)) == {"Player", "Metric"}
     enc = default_encoding(df)
-    assert enc.position == "Metric"
+    assert enc.position is None
     assert enc.color == "Player"
-    assert enc.facet is None
+    assert enc.facet == "Metric"
 
 
-def test_two_varying_axes_player_and_metric_player_larger_takes_position():
-    # Player has 3 distinct values, Metric only 2 -- Player is larger.
-    rows = [
-        {"Player": "Sloan", "Metric": "Kills", "Value": 1},
-        {"Player": "Azana", "Metric": "Kills", "Value": 1},
-        {"Player": "Yuki", "Metric": "Aces", "Value": 1},
-    ]
-    df = _df(rows)
-    assert set(varying_axes(df)) == {"Player", "Metric"}
-    enc = default_encoding(df)
-    assert enc.position == "Player"
-    assert enc.color == "Metric"
-    assert enc.facet is None
-
-
-def test_three_varying_axes_smallest_cardinality_facets_game_takes_position():
-    # Metric has the smallest cardinality (2) vs Player (3) and Game (4).
+def test_three_varying_axes_always_the_same_fixed_roles():
     rows = []
     for player in ("Sloan", "Azana", "Yuki"):
         for game in ("G1", "G2", "G3", "G4"):
@@ -101,25 +101,9 @@ def test_three_varying_axes_smallest_cardinality_facets_game_takes_position():
     df = _df(rows)
     assert set(varying_axes(df)) == {"Player", "Game", "Metric"}
     enc = default_encoding(df)
-    assert enc.facet == "Metric"
     assert enc.position == "Game"
     assert enc.color == "Player"
-
-
-def test_three_varying_axes_game_smallest_cardinality_facets_larger_of_rest_takes_position():
-    # Game has the smallest cardinality (2) here -- once it facets away,
-    # Game is no longer in remaining, so position picks the larger of
-    # Player (4) vs Metric (2): Player.
-    rows = []
-    for player in ("P1", "P2", "P3", "P4"):
-        for game in ("G1", "G2"):
-            for metric in ("Kills", "Aces"):
-                rows.append({"Player": player, "Game": game, "Metric": metric, "Value": 1})
-    df = _df(rows)
-    enc = default_encoding(df)
-    assert enc.facet == "Game"
-    assert enc.position == "Player"
-    assert enc.color == "Metric"
+    assert enc.facet == "Metric"
 
 
 # ──────────────────────────────────────────────────────────────

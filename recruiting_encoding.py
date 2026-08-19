@@ -2,8 +2,10 @@
 recruiting_encoding.py
 ========================
 Decides chart encoding (which axis becomes x-position, color, or panel
-split) from which axes still vary in a query result -- ONE mechanism
-for 0/1/2/3 varying axes, not per-situation special-casing.
+split) from which axes still vary in a query result. The default is a
+fixed mapping -- Game -> position, Player -> color, Metric -> facet --
+applied uniformly to however many of those actually vary (0 through 3),
+not per-situation special-casing; the coach can still override any slot.
 
 Pure pandas + dataclasses + plotly.express, no Streamlit or LLM imports
 -- same Streamlit-agnostic module pattern already used by
@@ -49,38 +51,19 @@ def varying_axes(df: pd.DataFrame) -> List[str]:
 
 def default_encoding(df: pd.DataFrame) -> EncodingAssignment:
     """
-    One rule for every case:
-      - 0 varying axes -> nothing to encode.
-      - if all 3 axes vary, the one with the SMALLEST cardinality becomes
-        facet (fewest panels); otherwise no facet.
-      - of what's left, Game takes position if it's still varying
-        (sequence-shaped axes read best as position); otherwise whichever
-        remaining axis has the LARGER cardinality takes position.
-      - anything left over goes to color.
-    Ties in the cardinality comparisons resolve to whichever axis comes
-    first in AXES (Player, then Game, then Metric) -- arbitrary but
-    deterministic.
+    Fixed default, independent of cardinality: Game -> position, Player
+    -> color, Metric -> facet -- whichever of those actually vary in this
+    result (see varying_axes); an axis that doesn't vary (absent, or
+    constant in this particular result) simply isn't assigned. The coach
+    can still override any slot from there via reconcile_encoding/the UI
+    dropdowns.
     """
     axes = varying_axes(df)
-    if not axes:
-        return EncodingAssignment()
-
-    remaining = list(axes)
-    facet = None
-    if len(axes) == 3:
-        facet = min(axes, key=lambda a: df[a].nunique(dropna=True))
-        remaining = [a for a in remaining if a != facet]
-
-    position = None
-    if remaining:
-        if "Game" in remaining:
-            position = "Game"
-        else:
-            position = max(remaining, key=lambda a: df[a].nunique(dropna=True))
-        remaining = [a for a in remaining if a != position]
-
-    color = remaining[0] if remaining else None
-    return EncodingAssignment(position=position, color=color, facet=facet)
+    return EncodingAssignment(
+        position="Game" if "Game" in axes else None,
+        color="Player" if "Player" in axes else None,
+        facet="Metric" if "Metric" in axes else None,
+    )
 
 
 def slot_options(df: pd.DataFrame) -> List[Optional[str]]:

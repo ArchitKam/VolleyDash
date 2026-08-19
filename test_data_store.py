@@ -21,11 +21,19 @@ from recruiting_tree import NodeKind, seed_recruiting_tree
 @pytest.fixture(autouse=True)
 def _clear_caches_and_secrets(monkeypatch):
     """@st.cache_data is process-global -- clear it before every test so
-    one test's mocked response can't leak into the next. Also scrub the
-    two secrets from the environment by default; individual tests set
-    what they need."""
+    one test's mocked response can't leak into the next. Also isolate
+    secrets from whatever's actually on this machine: a real
+    .streamlit/secrets.toml (e.g. for local manual testing against the
+    real VolleyData repo) would otherwise make st.secrets see real
+    values regardless of monkeypatch.delenv, since that only clears
+    environment variables -- st.secrets reads the TOML file directly,
+    a separate source _get_secret checks FIRST. Replacing it with a
+    plain empty dict here makes every test start from a clean "nothing
+    configured" state; individual tests opt into "configured" via
+    monkeypatch.setenv, which _get_secret still falls back to."""
     store.get_games.clear()
     store.load_game_df.clear()
+    monkeypatch.setattr(store.st, "secrets", {})
     for key in ("GITHUB_DATA_REPO", "GITHUB_DATA_TOKEN"):
         monkeypatch.delenv(key, raising=False)
     yield
