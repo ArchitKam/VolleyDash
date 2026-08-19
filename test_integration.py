@@ -34,7 +34,7 @@ import app
 import recruiting_data_store
 from recruiting_llm import (
     LLMUnavailableError, _validate_and_repair, decompose_recruiting_query,
-    parse_phrase_to_formula, parse_phrase_to_formula_llm,
+    merge_same_shape_actions, parse_phrase_to_formula, parse_phrase_to_formula_llm,
 )
 from recruiting_operations import Reduce, Rank, Compare, Slice, ValuePredicate
 from recruiting_tree import KnowledgeTree
@@ -138,21 +138,41 @@ def _run_repaired_actions(raw_decomposition: dict, tree: KnowledgeTree,
                 })
                 continue
 
-        resolved_player = app.resolve_player_name(action.get("player"), known_player_pool)
+        # Mirrors app.py's raw_player/multi_players handling exactly: a
+        # merged action's "player" field can be a LIST of raw hints
+        # (merge_same_shape_actions, recruiting_llm.py), each of which
+        # still needs resolving individually against the real roster.
+        raw_player = action.get("player")
+        if isinstance(raw_player, list):
+            resolved_players = []
+            seen_players = set()
+            for hint in raw_player:
+                candidate = app.resolve_player_name(hint, known_player_pool)
+                if candidate is not None and candidate not in seen_players:
+                    seen_players.add(candidate)
+                    resolved_players.append(candidate)
+            multi_players = resolved_players if len(resolved_players) >= 2 else None
+            resolved_player = resolved_players[0] if len(resolved_players) == 1 else None
+        else:
+            resolved_player = app.resolve_player_name(raw_player, known_player_pool)
+            multi_players = None
         action_games = [g for g, _ in game_dfs]  # tests pre-resolve games directly
 
-        fetch_player = None if pipeline else resolved_player
+        fetch_player = None if (pipeline or multi_players) else resolved_player
         if is_category:
             result_df = app.run_category_query(tree, branch_id, game_dfs, player_name=fetch_player)
         else:
             result_df = app.run_metric_query(leaf.spec, tree, game_dfs, player_name=fetch_player)
 
         pipeline_notes: List[str] = []
-        if pipeline:
+        if pipeline or multi_players:
             pipeline = list(pipeline)
             has_player_slice = any(isinstance(op, Slice) and op.axis == "Player" for op in pipeline)
-            if resolved_player is not None and not has_player_slice:
-                pipeline.append(Slice(axis="Player", keep=[resolved_player]))
+            if not has_player_slice:
+                if multi_players:
+                    pipeline.append(Slice(axis="Player", keep=multi_players))
+                elif resolved_player is not None:
+                    pipeline.append(Slice(axis="Player", keep=[resolved_player]))
             has_metric_slice = any(isinstance(op, Slice) and op.axis == "Metric" for op in pipeline)
             primary_metric = action.get("metric_of_interest")
             if not is_category and primary_metric and not has_metric_slice:
@@ -457,8 +477,127 @@ def test_empty_pipeline_is_a_true_no_op_through_real_repair(real_tree, synthetic
 
 
 # ──────────────────────────────────────────────────────────────
-# 9. JSON persistence untouched -- regression guard per the task's own
-#    instruction to treat any breakage here as cross-layer leakage.
+# 9. merge_same_shape_actions -- undoing the router's own "one action per
+#    player" split after the fact, without touching that instruction.
+# ──────────────────────────────────────────────────────────────
+
+def _action(metric=None, skill_group=None, player=None, game_hint=None,
+            title="", pipeline=None, is_committed=True):
+    return {
+        "metric_of_interest": metric, "skill_group": skill_group, "player": player,
+        "game_hint": game_hint, "title": title, "pipeline": pipeline or [],
+        "is_committed": is_committed,
+    }
+
+
+def test_merge_two_same_shaped_single_player_actions():
+    actions = [
+        _action(metric="Kills Per Set", player="Sloan", title="Sloan's Kills Per Set"),
+        _action(metric="Kills Per Set", player="Azana", title="Azana's Kills Per Set"),
+    ]
+    merged = merge_same_shape_actions(actions)
+    assert len(merged) == 1
+    assert merged[0]["player"] == ["Sloan", "Azana"]
+    assert merged[0]["title"] == "Sloan vs Azana -- Kills Per Set"
+    # Everything else carried over from the group, untouched.
+    assert merged[0]["metric_of_interest"] == "Kills Per Set"
+    assert merged[0]["is_committed"] is True
+
+
+def test_merge_three_or_more_same_shaped_actions_combine_into_one():
+    actions = [
+        _action(metric="Kills Per Set", player=name)
+        for name in ("Sloan", "Azana", "Yuki", "Priya")
+    ]
+    merged = merge_same_shape_actions(actions)
+    assert len(merged) == 1
+    assert merged[0]["player"] == ["Sloan", "Azana", "Yuki", "Priya"]
+
+
+def test_merge_does_not_combine_different_metric():
+    actions = [
+        _action(metric="Kills Per Set", player="Sloan"),
+        _action(metric="Aces Per Set", player="Azana"),
+    ]
+    merged = merge_same_shape_actions(actions)
+    assert len(merged) == 2
+    assert {a["player"] for a in merged} == {"Sloan", "Azana"}
+
+
+def test_merge_does_not_combine_different_skill_group():
+    actions = [
+        _action(skill_group="Serve", player="Sloan"),
+        _action(skill_group="Attack", player="Azana"),
+    ]
+    merged = merge_same_shape_actions(actions)
+    assert len(merged) == 2
+
+
+def test_merge_does_not_combine_different_game_hint():
+    actions = [
+        _action(metric="Kills Per Set", player="Sloan", game_hint="Vegas Aces"),
+        _action(metric="Kills Per Set", player="Azana", game_hint="Mavs 816"),
+    ]
+    merged = merge_same_shape_actions(actions)
+    assert len(merged) == 2
+
+
+def test_merge_does_not_combine_different_pipeline():
+    actions = [
+        _action(metric="Kills Per Set", player="Sloan", pipeline=[Rank(axis="Player", limit=1)]),
+        _action(metric="Kills Per Set", player="Azana", pipeline=[]),
+    ]
+    merged = merge_same_shape_actions(actions)
+    assert len(merged) == 2
+
+
+def test_lone_action_passes_through_unchanged():
+    actions = [_action(metric="Kills Per Set", player="Sloan", title="Sloan's Kills Per Set")]
+    merged = merge_same_shape_actions(actions)
+    assert merged == actions
+
+
+def test_merge_skips_actions_with_null_or_duplicate_player():
+    # A null player and an already-multi player never merge with anything,
+    # even same-shaped -- only distinct, non-null, single-string players
+    # are mergeable.
+    actions = [
+        _action(metric="Kills Per Set", player=None),
+        _action(metric="Kills Per Set", player="Sloan"),
+        _action(metric="Kills Per Set", player=["Already", "Merged"]),
+    ]
+    merged = merge_same_shape_actions(actions)
+    assert merged == actions  # nothing here is a mergeable pair, all pass through
+
+
+def test_merge_end_to_end_through_real_repair_and_execution(real_tree, synthetic_games):
+    """The full path: router-shaped JSON (as if the model split "Sloan's
+    and Azana's Kills Per Set" into two actions, per its own system-prompt
+    instruction) -> _validate_and_repair (merges them) -> the real
+    execution loop (resolves each raw hint, Slice-narrows) -> one result
+    containing BOTH players, not two separate results."""
+    raw = {
+        "intent_summary": "test", "reasoning": "", "limitations": "", "unrecognized_terms": [],
+        "actions": [
+            {"metric_of_interest": "Kills Per Set", "skill_group": None,
+             "player": "Sloan", "game_hint": None, "title": "Sloan's Kills Per Set"},
+            {"metric_of_interest": "Kills Per Set", "skill_group": None,
+             "player": "Azana", "game_hint": None, "title": "Azana's Kills Per Set"},
+        ],
+    }
+    repaired = _validate_and_repair(raw, real_tree)
+    assert len(repaired["actions"]) == 1, "the two same-shaped single-player actions should have merged"
+    assert repaired["actions"][0]["player"] == ["Sloan", "Azana"]
+
+    results = _run_repaired_actions(raw, real_tree, synthetic_games, KNOWN_PLAYERS)
+    assert len(results) == 1
+    df = results[0]["result_df"]
+    assert set(df["Player"]) == {"#7 Sloan T.", "#22 Azana S."}
+
+
+# ──────────────────────────────────────────────────────────────
+# 10. JSON persistence untouched -- regression guard per the task's own
+#     instruction to treat any breakage here as cross-layer leakage.
 # ──────────────────────────────────────────────────────────────
 
 def test_json_persistence_round_trip_untouched(real_tree):
@@ -478,7 +617,7 @@ def test_json_persistence_round_trip_untouched(real_tree):
 
 
 # ──────────────────────────────────────────────────────────────
-# 10. LIVE tests -- real vLLM call, skip gracefully if unreachable
+# 11. LIVE tests -- real vLLM call, skip gracefully if unreachable
 # ──────────────────────────────────────────────────────────────
 
 def test_live_router_yendas_query(real_tree):

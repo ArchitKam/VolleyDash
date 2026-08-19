@@ -8,3 +8,8 @@ __pycache__/
 # VolleyData repo, never here, not even by accident.
 *.csv
 recruiting_kb_data.json
+# Explicitly by name too, not just by pattern: it has its own nested .git
+# (from being pushed to VolleyData directly), so a plain `git add -A`
+# stages it as an embedded-repo gitlink -- *.csv/recruiting_kb_data.json
+# patterns above don't catch that, since a gitlink isn't matched as a file.
+VolleyData_upload/

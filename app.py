@@ -38,6 +38,10 @@ from recruiting_operations import Operation, Slice, run_pipeline, describe_pipel
 from recruiting_data_store import (
     GameInfo, get_games, load_game_df, save_committed_tree, load_committed_tree,
 )
+from recruiting_encoding import (
+    EncodingAssignment, default_encoding, reconcile_encoding, set_game_order,
+    slot_options, render as render_encoded_panels,
+)
 
 # Bridge Streamlit secrets into the environment before recruiting_llm.py
 # reads them -- that module stays Streamlit-agnostic (so it's directly
@@ -808,57 +812,6 @@ def render_tree_graph(tree: KnowledgeTree, known_games: List[GameInfo]) -> None:
     render_node_panel(tree, st.session_state.selected_node_id, worked_example_df)
 
 
-def render_metric_bar_chart(df: pd.DataFrame, title: str, highlight: Optional[str] = None) -> go.Figure:
-    fig = go.Figure()
-    valid = df[df["Value"].notna()]
-    if valid.empty:
-        return fig
-
-    n_games = valid["Game"].nunique()
-    n_players = valid["Player"].nunique()
-
-    if n_players <= 1:
-        colors = [UMD_GOLD if highlight and g == highlight else UMD_RED for g in valid["Game"]]
-        fig.add_trace(go.Bar(x=valid["Game"], y=valid["Value"], marker_color=colors, customdata=valid["Player"]))
-        fig.update_layout(xaxis_title="Game", yaxis_title=title, showlegend=False)
-    elif n_games <= 1:
-        colors = [UMD_GOLD if highlight and p == highlight else UMD_RED for p in valid["Player"]]
-        fig.add_trace(go.Bar(x=valid["Player"], y=valid["Value"], marker_color=colors, customdata=valid["Player"]))
-        fig.update_layout(xaxis_title="Player", yaxis_title=title, showlegend=False)
-    else:
-        for idx, player in enumerate(sorted(valid["Player"].unique())):
-            sub = valid[valid["Player"] == player]
-            color = UMD_GOLD if highlight and player == highlight else UMD_CYCLE[idx % len(UMD_CYCLE)]
-            fig.add_trace(go.Bar(name=player, x=sub["Game"], y=sub["Value"], customdata=sub["Player"], marker_color=color))
-        fig.update_layout(barmode="group", xaxis_title="Game", yaxis_title=title, showlegend=True)
-
-    fig.update_layout(**PLOTLY_BASE, title=title)
-    return fig
-
-
-def render_category_bar_chart(df: pd.DataFrame, title: str, highlight: Optional[str] = None) -> go.Figure:
-    fig = go.Figure()
-    valid = df[df["Value"].notna()]
-    if valid.empty:
-        return fig
-
-    n_games = valid["Game"].nunique()
-
-    if n_games <= 1:
-        colors = [UMD_GOLD if highlight and m == highlight else UMD_RED for m in valid["Metric"]]
-        fig.add_trace(go.Bar(x=valid["Metric"], y=valid["Value"], marker_color=colors, customdata=valid["Metric"]))
-        fig.update_layout(showlegend=False)
-    else:
-        for idx, game in enumerate(sorted(valid["Game"].unique())):
-            sub = valid[valid["Game"] == game]
-            fig.add_trace(go.Bar(name=game, x=sub["Metric"], y=sub["Value"], customdata=sub["Metric"],
-                                  marker_color=UMD_CYCLE[idx % len(UMD_CYCLE)]))
-        fig.update_layout(barmode="group", showlegend=True)
-
-    fig.update_layout(**PLOTLY_BASE, title=title, xaxis_title="Metric", yaxis_title="Value")
-    return fig
-
-
 def extract_click_highlight(chart_click_key: str) -> Optional[str]:
     click_state = st.session_state.get(chart_click_key)
     if not click_state:
@@ -1026,7 +979,35 @@ with tab_qa:
                         })
                         continue
 
-                resolved_player = resolve_player_name(action.get("player"), known_player_pool)
+                # action.get("player") is usually a single raw hint string,
+                # but merge_same_shape_actions (recruiting_llm.py) can also
+                # hand back a LIST of raw hints -- the router is explicitly
+                # instructed to split "Sloan's and Azana's kills per set"
+                # into two same-shaped actions, and that repair step merges
+                # them back into one action after the fact. Each hint still
+                # needs resolving individually via the real roster (that's
+                # only possible here, not in recruiting_llm.py, since only
+                # known_player_pool -- built from the real CSVs -- knows
+                # what a raw hint like "Sloan" actually resolves to).
+                raw_player = action.get("player")
+                if isinstance(raw_player, list):
+                    resolved_players = []
+                    seen_players = set()
+                    for hint in raw_player:
+                        candidate = resolve_player_name(hint, known_player_pool)
+                        if candidate is not None and candidate not in seen_players:
+                            seen_players.add(candidate)
+                            resolved_players.append(candidate)
+                    # 2+ genuinely distinct resolved players -> a real
+                    # multi-player merge. 0 or 1 (e.g. both hints turned out
+                    # to name the same real player, or only one resolved at
+                    # all) collapses to ordinary single-player/no-player
+                    # behavior -- never a fabricated distinction.
+                    multi_players = resolved_players if len(resolved_players) >= 2 else None
+                    resolved_player = resolved_players[0] if len(resolved_players) == 1 else None
+                else:
+                    resolved_player = resolve_player_name(raw_player, known_player_pool)
+                    multi_players = None
 
                 game_note = None
                 if action.get("game_hint"):
@@ -1047,8 +1028,13 @@ with tab_qa:
                 # make a "team average" equal that one player's own value.
                 # Player-narrowing the coach actually asked for is applied
                 # as an explicit pipeline step instead (below), which runs
-                # AFTER any cross-player aggregation.
-                fetch_player = None if pipeline else resolved_player
+                # AFTER any cross-player aggregation. A multi-player merge
+                # forces this same unfiltered-fetch-then-Slice-narrow path
+                # even when the router itself emitted no pipeline at all --
+                # run_metric_query/run_category_query's player_name filter
+                # only ever accepts ONE name, so more than one resolved
+                # player has no route through it other than the pipeline.
+                fetch_player = None if (pipeline or multi_players) else resolved_player
                 if is_category:
                     result_df = run_category_query(tree, branch_id, game_dfs, player_name=fetch_player)
                 else:
@@ -1061,15 +1047,24 @@ with tab_qa:
                 # change either, per fetch_player above), so a plain
                 # single-metric/category query is byte-for-byte unchanged.
                 pipeline_notes: List[str] = []
-                if pipeline:
+                if pipeline or multi_players:
                     pipeline = list(pipeline)
                     has_player_slice = any(isinstance(op, Slice) and op.axis == "Player" for op in pipeline)
-                    if resolved_player is not None and not has_player_slice:
-                        # The coach named a specific player but the pipeline
-                        # itself doesn't narrow to one -- narrow LAST, so
-                        # whatever Compare/Rank/Reduce runs first still sees
-                        # every player it needs to.
-                        pipeline.append(Slice(axis="Player", keep=[resolved_player]))
+                    if not has_player_slice:
+                        if multi_players:
+                            # Narrow LAST, same reasoning as the single-
+                            # player case below -- whatever Compare/Rank/
+                            # Reduce runs first still sees every player it
+                            # needs to, and the merged set of resolved
+                            # players (not just one) is what actually gets
+                            # kept.
+                            pipeline.append(Slice(axis="Player", keep=multi_players))
+                        elif resolved_player is not None:
+                            # The coach named a specific player but the pipeline
+                            # itself doesn't narrow to one -- narrow LAST, so
+                            # whatever Compare/Rank/Reduce runs first still sees
+                            # every player it needs to.
+                            pipeline.append(Slice(axis="Player", keep=[resolved_player]))
 
                     # Same reasoning, Metric axis: a cross-metric Slice
                     # predicate (e.g. "her passing in games she had 10+
@@ -1098,6 +1093,11 @@ with tab_qa:
 
             st.session_state.qa_last_decomposition = decomposition
             st.session_state.qa_action_results = action_results
+            # Fresh question -> fresh chart encodings. Keyed by action
+            # index below; without this reset, a NEW question's action 0
+            # would silently inherit whatever manual position/color/facet
+            # override was left over from the PREVIOUS question's action 0.
+            st.session_state.qa_encodings = {}
 
     decomposition = st.session_state.qa_last_decomposition
     action_results = st.session_state.qa_action_results
@@ -1213,9 +1213,22 @@ with tab_qa:
                     st.error(f"Could not automatically draft a formula: {draft_proposal.message}")
                     st.caption("You can manually define this metric in the Knowledge Base tab.")
 
-        # ── 3. VISUALIZATION CHARTS ──
+        # ── 3. VISUALIZATION CHARTS -- one adaptive chart per action, encoded
+        # by which of Player/Game/Metric still vary in THAT action's own
+        # result (see recruiting_encoding.py). Encodings are cached in
+        # st.session_state.qa_encodings, keyed by action index, and reset
+        # to a fresh default whenever a NEW question is asked (see the
+        # qa_encodings = {} reset alongside qa_action_results above) --
+        # so switching questions never carries over a stale override, but
+        # tweaking the dropdowns below persists across reruns of the SAME
+        # question. NOTE: this replaces the old click-to-highlight chart
+        # interaction -- a faceted multi-panel result doesn't have one
+        # obvious "which panel was clicked" answer, so charts here are
+        # adjustable via the dropdowns but no longer clickable-to-highlight
+        # the table above.
         if valid_action_results:
             with st.expander("📈 Interactive Visualizations", expanded=True):
+                qa_encodings = st.session_state.qa_encodings
                 for i, item in enumerate(valid_action_results):
                     action = item["action"]
                     title = action.get("title") or action.get("metric_of_interest") or action.get("skill_group") or f"Chart {i + 1}"
@@ -1236,18 +1249,62 @@ with tab_qa:
                     if result_df.empty or result_df["Value"].notna().sum() == 0:
                         continue
 
-                    is_category = item["is_category"]
-                    sub_key = f"qa_chart_click_{i}"
-                    sub_highlight = extract_click_highlight(sub_key)
+                    st.markdown(f"**{title}**")
+                    encoding = qa_encodings.get(i) or default_encoding(result_df)
+                    options = slot_options(result_df)
 
-                    if is_category and result_df["Player"].nunique() > 1:
-                        st.caption(f"Chart for '{title}' omitted (multiple players in category query -- see table above).")
-                    elif is_category:
-                        fig = render_category_bar_chart(result_df, title=title, highlight=sub_highlight)
-                        st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode=["points"], key=sub_key)
+                    def _fmt(axis):
+                        return axis or "(none)"
+
+                    col_pos, col_color, col_facet = st.columns(3)
+                    with col_pos:
+                        chosen_position = st.selectbox(
+                            "Group by", options, index=options.index(encoding.position),
+                            format_func=_fmt, key=f"qa_enc_position_{i}",
+                        )
+                    with col_color:
+                        chosen_color = st.selectbox(
+                            "Color by", options, index=options.index(encoding.color),
+                            format_func=_fmt, key=f"qa_enc_color_{i}",
+                        )
+                    with col_facet:
+                        chosen_facet = st.selectbox(
+                            "Split into panels by", options, index=options.index(encoding.facet),
+                            format_func=_fmt, key=f"qa_enc_facet_{i}",
+                        )
+
+                    if chosen_position != encoding.position:
+                        encoding = reconcile_encoding(encoding, "position", chosen_position)
+                    if chosen_color != encoding.color:
+                        encoding = reconcile_encoding(encoding, "color", chosen_color)
+                    if chosen_facet != encoding.facet:
+                        encoding = reconcile_encoding(encoding, "facet", chosen_facet)
+
+                    if encoding.position == "Game":
+                        order_labels = ["value", "original"]
+                        chosen_order = st.radio(
+                            "Game order", order_labels, index=order_labels.index(encoding.game_order),
+                            horizontal=True, key=f"qa_enc_gameorder_{i}",
+                            format_func=lambda o: "By value" if o == "value" else "Original order",
+                        )
+                        if chosen_order != encoding.game_order:
+                            encoding = set_game_order(encoding, chosen_order)
+
+                    qa_encodings[i] = encoding
+
+                    panels = render_encoded_panels(result_df, encoding, value_col="Value")
+                    if not panels:
+                        st.info("No computable values for this chart.")
+                    elif len(panels) == 1:
+                        _, fig = panels[0]
+                        fig.update_layout(**PLOTLY_BASE, title=title)
+                        st.plotly_chart(fig, use_container_width=True, key=f"qa_chart_{i}")
                     else:
-                        fig = render_metric_bar_chart(result_df, title=title, highlight=sub_highlight)
-                        st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode=["points"], key=sub_key)
+                        panel_cols = st.columns(len(panels))
+                        for col, (panel_title, fig) in zip(panel_cols, panels):
+                            fig.update_layout(**PLOTLY_BASE, title=f"{title} — {panel_title}")
+                            with col:
+                                st.plotly_chart(fig, use_container_width=True, key=f"qa_chart_{i}_{panel_title}")
 
         # ── 4. ROUTING DETAILS ──
         with st.expander("⚙️ LLM Router Decomposition"):

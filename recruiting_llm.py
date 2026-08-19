@@ -33,7 +33,7 @@ from openai import OpenAI
 from openai import APIConnectionError, APITimeoutError
 
 from recruiting_tree import ALL_SKILL_GROUPS, KnowledgeTree, NodeKind, RECRUITING_COLUMN_SCHEMA
-from recruiting_operations import VALID_AGGS, VALID_COMPARISONS, pipeline_from_dicts
+from recruiting_operations import VALID_AGGS, VALID_COMPARISONS, pipeline_from_dicts, pipeline_to_dicts
 
 LLM_BASE_URL = "https://api.groq.com/openai/v1"
 LLM_MODEL = "openai/gpt-oss-20b"
@@ -555,6 +555,81 @@ def _repair_unrecognized_terms(raw_terms: Any) -> List[str]:
     return [t.strip() for t in raw_terms if isinstance(t, str) and t.strip()]
 
 
+def _action_shape_key(action: Dict[str, Any]) -> tuple:
+    """Everything about an action EXCEPT player/title -- two actions with
+    the same key are "the same ask, different player" candidates for
+    merge_same_shape_actions. Pipeline is compared by VALUE (via
+    pipeline_to_dicts + a sorted-keys JSON dump), not by identity/hash --
+    Slice carries a `keep: List[str]` field, which makes the Operation
+    dataclasses unhashable, so they can't be used as/in a dict key
+    directly."""
+    return (
+        action.get("metric_of_interest"),
+        action.get("skill_group"),
+        action.get("game_hint"),
+        action.get("is_committed"),
+        json.dumps(pipeline_to_dicts(action.get("pipeline") or []), sort_keys=True),
+    )
+
+
+def merge_same_shape_actions(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Runs after per-action repair, before anything executes. The router is
+    explicitly instructed (see _build_router_system_prompt) to split a
+    same-metric-different-player question into one action per player --
+    intentional, left alone here. This undoes the visible EFFECT of that
+    split after the fact (one action, multiple players) rather than
+    relying on the model not doing it in the first place.
+
+    Groups actions by everything EXCEPT player/title (see
+    _action_shape_key). Within a group, if 2+ actions each have a
+    distinct, non-null, single (string) player -- and none already has a
+    null or multi-value player -- merges them into ONE action: player
+    becomes the list of those raw hints (still unresolved text; resolving
+    a hint against the real roster needs known_player_pool, which only
+    app.py has -- see its execution loop for where that list gets
+    resolved and turned into a Slice(axis="Player", keep=[...]) pipeline
+    step), title is regenerated, everything else copied from the first
+    action in the group.
+
+    An action with no same-shaped sibling, or one that differs in metric/
+    skill_group/game_hint/pipeline, is left completely alone -- a false
+    merge (combining two actions that aren't really "the same ask,
+    different player") would be worse than the one-chart-per-player bug
+    this exists to fix.
+    """
+    groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    order: List[tuple] = []
+    for action in actions:
+        key = _action_shape_key(action)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(action)
+
+    merged: List[Dict[str, Any]] = []
+    for key in order:
+        group = groups[key]
+        players = [a.get("player") for a in group]
+        is_mergeable = (
+            len(group) >= 2
+            and all(isinstance(p, str) and p.strip() for p in players)
+            and len({p.strip().lower() for p in players}) == len(players)
+        )
+        if not is_mergeable:
+            merged.extend(group)
+            continue
+
+        merged_action = dict(group[0])
+        merged_action["player"] = players
+        label = merged_action.get("metric_of_interest") or merged_action.get("skill_group") or ""
+        vs_players = " vs ".join(players)
+        merged_action["title"] = f"{vs_players} -- {label}" if label else vs_players
+        merged.append(merged_action)
+
+    return merged
+
+
 def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[str, Any]:
     """Stage 2 -- deterministic repair. Preserves raw metric names even if they
     are not yet committed in the tree, allowing downstream UIs to trigger
@@ -609,7 +684,7 @@ def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[st
             "pipeline": pipeline,
         })
 
-    result["actions"] = repaired_actions
+    result["actions"] = merge_same_shape_actions(repaired_actions)
     result["unrecognized_terms"] = _repair_unrecognized_terms(result.get("unrecognized_terms"))
     if notes:
         existing = result.get("limitations") or ""
