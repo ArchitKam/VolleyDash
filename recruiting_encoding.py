@@ -120,7 +120,10 @@ def _one_figure(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str) 
     color = encoding.color if encoding.position else None
     if x is None:
         return px.bar(df, y=value_col)
-    return px.bar(df, x=x, y=value_col, color=color)
+    # barmode="group" -- side-by-side bars per color (e.g. one bar per
+    # player at each game), not Plotly's default stacked/"relative" mode,
+    # which reads as one combined total rather than a comparison.
+    return px.bar(df, x=x, y=value_col, color=color, barmode="group")
 
 
 def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Value") -> List[Tuple[str, go.Figure]]:

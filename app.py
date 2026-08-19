@@ -1318,11 +1318,18 @@ with tab_qa:
                         fig.update_layout(**PLOTLY_BASE, title=title)
                         st.plotly_chart(fig, use_container_width=True, key=f"qa_chart_{i}")
                     else:
-                        panel_cols = st.columns(len(panels))
-                        for col, (panel_title, fig) in zip(panel_cols, panels):
-                            fig.update_layout(**PLOTLY_BASE, title=f"{title} — {panel_title}")
-                            with col:
-                                st.plotly_chart(fig, use_container_width=True, key=f"qa_chart_{i}_{panel_title}")
+                        # 2 panels per row, wrapping to a new row underneath
+                        # rather than squeezing every panel into one row --
+                        # a facet with several values stays readable instead
+                        # of each panel shrinking as more get added.
+                        panels_per_row = 2
+                        for row_start in range(0, len(panels), panels_per_row):
+                            row_panels = panels[row_start:row_start + panels_per_row]
+                            row_cols = st.columns(panels_per_row)
+                            for col, (panel_title, fig) in zip(row_cols, row_panels):
+                                fig.update_layout(**PLOTLY_BASE, title=f"{title} — {panel_title}")
+                                with col:
+                                    st.plotly_chart(fig, use_container_width=True, key=f"qa_chart_{i}_{panel_title}")
 
         # ── 4. ROUTING DETAILS ──
         with st.expander("⚙️ LLM Router Decomposition"):
