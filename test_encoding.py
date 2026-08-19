@@ -170,7 +170,8 @@ def test_slot_options_includes_none_plus_varying_axes():
 
 
 # ──────────────────────────────────────────────────────────────
-# render() -- color_map (consistent colors) and highlight (brushing)
+# render() -- color_map (consistent colors) and highlights (brushing,
+# one or more simultaneous selections each in its own color)
 # ──────────────────────────────────────────────────────────────
 
 def _comparison_df():
@@ -194,8 +195,8 @@ def test_render_applies_color_map_per_trace():
 def test_render_highlight_outlines_only_the_matching_bar():
     df = _comparison_df()
     enc = EncodingAssignment(position="Game", color="Player")
-    highlight = {"player": "Sloan", "game": "Vegas Aces", "metric": None}
-    _, fig = render(df, enc, highlight=highlight)[0]
+    highlights = [("#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None})]
+    _, fig = render(df, enc, highlights=highlights)[0]
 
     sloan_trace = next(t for t in fig.data if t.name == "Sloan")
     kendal_trace = next(t for t in fig.data if t.name == "Kendal")
@@ -203,6 +204,7 @@ def test_render_highlight_outlines_only_the_matching_bar():
     # Sloan's trace: Vegas Aces (index 0) gets the outline, Mavs 816 doesn't.
     assert list(sloan_trace.x) == ["Vegas Aces", "Mavs 816"]
     assert sloan_trace.marker.line.width == (4, 0)
+    assert sloan_trace.marker.line.color == ("#00BFFF", "rgba(0,0,0,0)")
 
     # Kendal's trace never matched the highlighted player at all --
     # untouched (None), not even a zero-width array.
@@ -217,9 +219,9 @@ def test_render_highlight_only_applies_to_the_matching_facet_panel():
                 rows.append({"Player": player, "Game": game, "Metric": metric, "Value": 1})
     df = _df(rows)
     enc = EncodingAssignment(position="Game", color="Player", facet="Metric")
-    highlight = {"player": "Sloan", "game": "Vegas Aces", "metric": "Kills Per Set"}
+    highlights = [("#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": "Kills Per Set"})]
 
-    panels = render(df, enc, highlight=highlight)
+    panels = render(df, enc, highlights=highlights)
     by_title = dict(panels)
     assert set(by_title) == {"Aces Per Set", "Kills Per Set"}
 
@@ -238,6 +240,40 @@ def test_render_no_highlight_leaves_figures_plain():
     _, fig = render(df, enc)[0]
     for trace in fig.data:
         assert trace.marker.line.width is None
+
+
+def test_render_multiple_highlights_each_get_their_own_color():
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player")
+    highlights = [
+        ("#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
+        ("#39FF14", {"player": "Kendal", "game": "Mavs 816", "metric": None}),
+    ]
+    _, fig = render(df, enc, highlights=highlights)[0]
+
+    sloan_trace = next(t for t in fig.data if t.name == "Sloan")
+    kendal_trace = next(t for t in fig.data if t.name == "Kendal")
+
+    # Sloan: Vegas Aces (index 0) lit up in the FIRST selection's color.
+    assert sloan_trace.marker.line.width == (4, 0)
+    assert sloan_trace.marker.line.color == ("#00BFFF", "rgba(0,0,0,0)")
+
+    # Kendal: Mavs 816 (index 1) lit up in the SECOND selection's color --
+    # both selections apply simultaneously, each to its own bar.
+    assert kendal_trace.marker.line.width == (0, 4)
+    assert kendal_trace.marker.line.color == ("rgba(0,0,0,0)", "#39FF14")
+
+
+def test_render_two_highlights_on_the_same_bar_the_later_one_wins():
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player")
+    highlights = [
+        ("#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
+        ("#39FF14", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
+    ]
+    _, fig = render(df, enc, highlights=highlights)[0]
+    sloan_trace = next(t for t in fig.data if t.name == "Sloan")
+    assert sloan_trace.marker.line.color == ("#39FF14", "rgba(0,0,0,0)")
 
 
 # ──────────────────────────────────────────────────────────────

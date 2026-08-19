@@ -31,7 +31,6 @@ import plotly.graph_objects as go
 
 AXES = ("Player", "Game", "Metric")
 _AXIS_KEY = {"Player": "player", "Game": "game", "Metric": "metric"}
-HIGHLIGHT_OUTLINE_COLOR = "#FFFFFF"
 HIGHLIGHT_OUTLINE_WIDTH = 4
 
 
@@ -114,39 +113,52 @@ def set_game_order(current: EncodingAssignment, order: str) -> EncodingAssignmen
     return replace(current, game_order=order)
 
 
-def _apply_highlight(fig: go.Figure, encoding: EncodingAssignment, highlight: Dict[str, Optional[str]]) -> None:
+def _apply_highlights(fig: go.Figure, encoding: EncodingAssignment,
+                       highlights: List[Tuple[str, Dict[str, Optional[str]]]]) -> None:
     """
-    Outlines whichever bar(s) match `highlight` (a dict with optional
-    'player'/'game'/'metric' values) with a thick, distinct border --
-    fill color stays whatever the color axis already assigned (identity:
-    "this bar is Sloan's"), only the outline changes (selection: "this
-    is the one that was clicked"). An axis this chart doesn't actually
-    encode is a wildcard (matches anything), so e.g. a highlight with no
-    "player" opinion doesn't prevent a Game-only match from lighting up.
+    Outlines whichever bar(s) match each (outline_color, highlight) pair
+    with a thick border in THAT selection's own color -- fill color stays
+    whatever the color axis already assigned (identity: "this bar is
+    Sloan's"), only the outline changes (selection: "this is one of the
+    things that was clicked"). Several independent selections can be lit
+    up at once, each in its own color (see app.py's qa_selections); if two
+    selections both match the same bar, the later one in the list wins
+    that bar's outline. An axis this chart doesn't actually encode is a
+    wildcard (matches anything), so e.g. a highlight with no "player"
+    opinion doesn't prevent a Game-only match from lighting up.
     """
+    if not highlights:
+        return
     color_key = _AXIS_KEY.get(encoding.color)
     position_key = _AXIS_KEY.get(encoding.position)
-    wanted_color = highlight.get(color_key) if color_key else None
-    wanted_position = highlight.get(position_key) if position_key else None
 
     for trace in fig.data:
-        if color_key and wanted_color is not None and trace.name != wanted_color:
-            continue  # this whole color-group doesn't match at all
         xs = list(trace.x) if trace.x is not None else []
         if not xs:
             continue
-        widths, colors = [], []
-        for x_val in xs:
-            hit = position_key is None or wanted_position is None or x_val == wanted_position
-            widths.append(HIGHLIGHT_OUTLINE_WIDTH if hit else 0)
-            colors.append(HIGHLIGHT_OUTLINE_COLOR if hit else "rgba(0,0,0,0)")
+
+        relevant = [
+            (outline_color, h) for outline_color, h in highlights
+            if not (color_key and h.get(color_key) is not None and trace.name != h.get(color_key))
+        ]
+        if not relevant:
+            continue  # no selection even partially concerns this color-group
+
+        widths = [0] * len(xs)
+        colors = ["rgba(0,0,0,0)"] * len(xs)
+        for outline_color, h in relevant:
+            wanted_position = h.get(position_key) if position_key else None
+            for idx, x_val in enumerate(xs):
+                if position_key is None or wanted_position is None or x_val == wanted_position:
+                    widths[idx] = HIGHLIGHT_OUTLINE_WIDTH
+                    colors[idx] = outline_color
         trace.marker.line.width = widths
         trace.marker.line.color = colors
 
 
 def _one_figure(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str,
                  color_map: Optional[Dict[str, str]] = None,
-                 highlight: Optional[Dict[str, Optional[str]]] = None) -> go.Figure:
+                 highlights: Optional[List[Tuple[str, Dict[str, Optional[str]]]]] = None) -> go.Figure:
     # position=None only happens when there was nothing to encode at all
     # (see default_encoding) or a manual override cleared it -- fall back
     # to color as the x-axis so a lone color-only assignment still plots
@@ -165,8 +177,8 @@ def _one_figure(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str,
         fig = px.bar(df, x=x, y=value_col, color=color, barmode="group",
                       color_discrete_map=color_map if (color and color_map) else None)
 
-    if highlight:
-        _apply_highlight(fig, encoding, highlight)
+    if highlights:
+        _apply_highlights(fig, encoding, highlights)
     return fig
 
 
@@ -176,7 +188,7 @@ def resolve_clicked_point(points: List[dict], encoding: EncodingAssignment, fig:
     Turns one Plotly click-selection point (as reported by
     st.plotly_chart's on_select payload) back into a
     {"player":..., "game":..., "metric":...} dict, using the SAME axis-
-    role mapping _apply_highlight uses -- so "click a bar" and "highlight
+    role mapping _apply_highlights uses -- so "click a bar" and "highlight
     a bar" always agree on which axis means what, regardless of which
     slot the coach has each axis assigned to. `panel_metric` fills the
     "metric" key when Metric isn't itself an encoded axis in THIS chart
@@ -204,7 +216,7 @@ def resolve_clicked_point(points: List[dict], encoding: EncodingAssignment, fig:
 
 def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Value",
            color_map: Optional[Dict[str, str]] = None,
-           highlight: Optional[Dict[str, Optional[str]]] = None) -> List[Tuple[str, go.Figure]]:
+           highlights: Optional[List[Tuple[str, Dict[str, Optional[str]]]]] = None) -> List[Tuple[str, go.Figure]]:
     """
     Renders df per encoding into one or more Plotly figures -- one entry
     normally, one per distinct facet value if encoding.facet is set.
@@ -212,10 +224,14 @@ def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Val
     nothing about Streamlit layout -- the caller decides how to arrange
     multiple panels (st.columns, tabs, whatever fits).
 
-    `highlight`, if given, only actually gets applied to the panel whose
-    facet value matches highlight["metric"] (when faceted by Metric) --
-    a highlight for "Kills Per Set" shouldn't light up a bar in the
-    "Aces Per Set" panel just because both happen to share a player/game.
+    `highlights`, if given, is a list of (outline_color, highlight_dict)
+    pairs -- one per active brushing-and-linking selection, each in its
+    own color (see app.py's qa_selections) -- so several bars/cells can be
+    lit up at once instead of only ever one. Each pair only actually gets
+    applied to the panel whose facet value matches its own
+    highlight_dict["metric"] (when faceted by Metric) -- a selection for
+    "Kills Per Set" shouldn't light up a bar in the "Aces Per Set" panel
+    just because both happen to share a player/game.
     """
     valid = df[df[value_col].notna()].copy()
     if valid.empty:
@@ -227,16 +243,18 @@ def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Val
         valid = valid.sort_values("Game")
 
     if encoding.facet is None:
-        return [("", _one_figure(valid, encoding, value_col, color_map, highlight))]
+        return [("", _one_figure(valid, encoding, value_col, color_map, highlights))]
 
     facet_key = _AXIS_KEY.get(encoding.facet)
     panels: List[Tuple[str, go.Figure]] = []
     for facet_value in sorted(valid[encoding.facet].dropna().unique(), key=str):
         sub = valid[valid[encoding.facet] == facet_value]
-        panel_highlight = None
-        if highlight:
-            wanted_facet = highlight.get(facet_key) if facet_key else None
-            if wanted_facet is None or wanted_facet == facet_value:
-                panel_highlight = highlight
-        panels.append((str(facet_value), _one_figure(sub, encoding, value_col, color_map, panel_highlight)))
+        panel_highlights = None
+        if highlights:
+            relevant = [
+                (outline_color, h) for outline_color, h in highlights
+                if not (facet_key and h.get(facet_key) is not None and h.get(facet_key) != facet_value)
+            ]
+            panel_highlights = relevant or None
+        panels.append((str(facet_value), _one_figure(sub, encoding, value_col, color_map, panel_highlights)))
     return panels

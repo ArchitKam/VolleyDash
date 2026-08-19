@@ -76,6 +76,16 @@ UMD_PLAYER_PALETTE = [
     UMD_RED, UMD_GOLD, "#8B0000", "#DAA520", UMD_WHITE, "#A9A9A9", "#FF6B6B", "#F0C300",
 ]
 
+# Colors for click-driven brushing-and-linking selections -- deliberately
+# NOT the player palette above, since a selection's color means "this is
+# the 2nd thing you clicked," not "this is Sloan" (a selection and a
+# player color living in the same space would be confusing wherever they
+# happened to collide). Bright/light so black text stays legible over an
+# exact-cell-match background (see format_tidy_table).
+SELECTION_PALETTE = [
+    "#00BFFF", "#39FF14", "#FFA500", "#FF69B4", "#00FFFF", "#FFFF00", "#DA70D6", "#7CFC00",
+]
+
 PLOTLY_BASE = dict(
     plot_bgcolor=UMD_BLACK, paper_bgcolor=UMD_BLACK,
     font=dict(family="sans-serif", color=UMD_WHITE),
@@ -611,15 +621,16 @@ def get_metric_format_pattern(tree: KnowledgeTree, metric_label: str) -> str:
 
 
 def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree,
-                       highlight: Optional[Dict[str, Optional[str]]] = None):
+                       selections: Optional[List[Dict[str, Optional[str]]]] = None):
     """Applies semantic formatting, clean dash fills for missing values,
-    and brushing-and-linking highlight: the SPECIFIC (Player, Game,
-    Metric) cell the highlight names gets a bold gold fill (this is the
-    exact thing that was clicked, in the chart or elsewhere), the rest
-    of that same row gets a lighter red tint (this is what it belongs
-    to), and non-matching rows are untouched."""
-    highlight = highlight or {}
-    hl_player, hl_game, hl_metric = highlight.get("player"), highlight.get("game"), highlight.get("metric")
+    and brushing-and-linking: each active selection (see qa_selections)
+    tints the row(s) it names in its OWN color, and the SPECIFIC (Player,
+    Game, Metric) cell it names gets a bold, white-bordered fill in that
+    same color (the exact thing that was clicked, in the chart or
+    elsewhere) -- several independent selections can each light up their
+    own rows/cells at once, in different colors, matching the chart
+    panels below. Non-matching rows are untouched."""
+    selections = selections or []
 
     format_dict = {}
     for col in df.columns:
@@ -627,20 +638,36 @@ def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree,
             continue
         format_dict[col] = get_metric_format_pattern(tree, str(col))
 
-    def _row_style(row):
-        row_hit = (
+    def _row_hit(row, sel):
+        hl_player, hl_game = sel.get("player"), sel.get("game")
+        return (
             (hl_player is not None or hl_game is not None)
             and (hl_player is None or row.get("Player") == hl_player)
             and (hl_game is None or row.get("Game") == hl_game)
         )
-        styles = []
-        for col in row.index:
-            if row_hit and hl_metric is not None and col == hl_metric:
-                styles.append(f"background-color: {UMD_GOLD}; color: {UMD_BLACK}; font-weight: bold; border: 2px solid {UMD_RED};")
-            elif row_hit:
-                styles.append(f"background-color: {UMD_RED}; color: {UMD_WHITE};")
-            else:
-                styles.append("")
+
+    def _row_style(row):
+        styles = [""] * len(row.index)
+
+        # Row-level tint: the first selection that names this row wins the
+        # tint color for the whole row (several selections rarely share a
+        # player+game, but if they do, picking one consistently beats an
+        # unreadable blend).
+        for sel in selections:
+            if _row_hit(row, sel):
+                styles = [f"background-color: {sel['color']}; color: {UMD_BLACK};"] * len(row.index)
+                break
+
+        # Exact-cell override: whichever selection names THIS row AND this
+        # specific metric column gets the bold bordered treatment, in its
+        # own color -- later-listed selections win a cell both concern.
+        for i, col in enumerate(row.index):
+            for sel in selections:
+                if _row_hit(row, sel) and sel.get("metric") is not None and col == sel.get("metric"):
+                    styles[i] = (
+                        f"background-color: {sel['color']}; color: {UMD_BLACK}; "
+                        f"font-weight: bold; border: 3px solid {UMD_WHITE};"
+                    )
         return styles
 
     return df.style.format(format_dict, na_rep="—").apply(_row_style, axis=1)
@@ -713,17 +740,50 @@ def reset_wizard() -> None:
     st.session_state.pop("review_parser_note", None)
 
 
-def _update_highlight_if_changed(new_highlight: Dict[str, Optional[str]]) -> None:
-    """Updates the shared brushing-and-linking selection and immediately
-    reruns if it actually changed. Without the explicit rerun, a click's
-    effect wouldn't show up until a SECOND interaction: the click that
-    sets it already triggered Streamlit's own on_select rerun, but that
-    happened BEFORE this function runs, so without rerunning again here
-    the CURRENT script pass still builds the table/charts using the
-    stale highlight."""
-    if new_highlight != st.session_state.qa_highlight:
-        st.session_state.qa_highlight = new_highlight
-        st.rerun()
+def _consume_new_click(signature_key: str, raw_signature: tuple) -> bool:
+    """A clicked table cell or chart bar stays selected in Streamlit's own
+    widget state across every later rerun (a widget's on_select payload
+    doesn't clear itself just because something else changed) -- without
+    this, `_toggle_selection` would re-fire on that SAME already-handled
+    click every single rerun, flickering the selection on and off. Tracks
+    the last raw click payload actually processed per widget key, and only
+    returns True when this one is new."""
+    signatures = st.session_state.qa_click_signatures
+    if signatures.get(signature_key) == raw_signature:
+        return False
+    signatures[signature_key] = raw_signature
+    return True
+
+
+def _selection_key(selection: Dict[str, Optional[str]]) -> tuple:
+    return (selection.get("player"), selection.get("game"), selection.get("metric"))
+
+
+def _next_selection_color(existing: List[Dict[str, Optional[str]]]) -> str:
+    used = {sel["color"] for sel in existing}
+    for color in SELECTION_PALETTE:
+        if color not in used:
+            return color
+    return SELECTION_PALETTE[len(existing) % len(SELECTION_PALETTE)]
+
+
+def _toggle_selection(candidate: Dict[str, Optional[str]]) -> None:
+    """Adds `candidate` as a new brushing-and-linking selection (assigned
+    the next free color from SELECTION_PALETTE), or removes it if the
+    exact same player/game/metric is already selected -- lets a coach
+    light up several bars/cells at once, each in its own color, and click
+    one again to turn it back off. Reruns immediately so the SAME script
+    pass that registered the click doesn't render the table/charts against
+    a now-stale selection list (see _consume_new_click)."""
+    selections = st.session_state.qa_selections
+    key = _selection_key(candidate)
+    for idx, sel in enumerate(selections):
+        if _selection_key(sel) == key:
+            selections.pop(idx)
+            st.rerun()
+            return
+    selections.append({**candidate, "color": _next_selection_color(selections)})
+    st.rerun()
 
 
 def render_dependents(dependents) -> None:
@@ -927,11 +987,17 @@ if "tree" not in st.session_state:
     st.session_state.qa_last_decomposition = None
     st.session_state.qa_action_results = []
     st.session_state.qa_encodings = {}
-    # Brushing-and-linking selection, shared between the consolidated
+    # Brushing-and-linking selections, shared between the consolidated
     # table and every chart panel: click a metric cell in the table, or a
-    # bar in a chart, and this fills in with {"player","game","metric"}
-    # (any of which can be None) so both sides highlight the same thing.
-    st.session_state.qa_highlight = {"player": None, "game": None, "metric": None}
+    # bar in a chart, and it's ADDED to this list as
+    # {"player","game","metric","color"} (any of player/game/metric can be
+    # None) -- clicking the exact same thing again removes it. Several can
+    # be active at once, each in its own SELECTION_PALETTE color, and both
+    # the table and every chart read this same list so they always agree.
+    st.session_state.qa_selections = []
+    # Last raw click payload actually turned into a selection, per widget
+    # key -- see _consume_new_click's docstring for why this is needed.
+    st.session_state.qa_click_signatures = {}
     st.session_state.expanded_branches = set()
     st.session_state.last_graph_click = None
     st.session_state.selected_node_id = None
@@ -1173,11 +1239,10 @@ with tab_qa:
             # would silently inherit whatever manual position/color/facet
             # override was left over from the PREVIOUS question's action 0.
             st.session_state.qa_encodings = {}
-            # Same reasoning for the brushing selection -- a stale
-            # highlight from the last question shouldn't light up a
-            # coincidentally-matching player/game/metric in a brand new
-            # result set.
-            st.session_state.qa_highlight = {"player": None, "game": None, "metric": None}
+            # Same reasoning for brushing -- stale selections from the last
+            # question shouldn't light up a coincidentally-matching
+            # player/game/metric in a brand new result set.
+            st.session_state.qa_selections = []
 
     decomposition = st.session_state.qa_last_decomposition
     action_results = st.session_state.qa_action_results
@@ -1195,37 +1260,42 @@ with tab_qa:
         consolidated_df = consolidate_action_results(valid_action_results)
 
         if not consolidated_df.empty:
-            # Brushing: a metric CELL clicked here updates qa_highlight,
-            # which both this table's own styling AND every chart panel
-            # below read from -- click a bar in a chart instead and the
-            # SAME state updates the other way (see the chart loop).
-            # Reads the PREVIOUS run's selection (Streamlit populates the
-            # widget's session_state key before the script body runs
-            # again), so a click this table just registered is already
-            # reflected by the time execution reaches here.
+            # Brushing: a metric CELL clicked here toggles it into/out of
+            # qa_selections, which both this table's own styling AND every
+            # chart panel below read from -- click a bar in a chart
+            # instead and the SAME shared list updates the other way (see
+            # the chart loop). Reads the PREVIOUS run's selection
+            # (Streamlit populates the widget's session_state key before
+            # the script body runs again), so a click this table just
+            # registered is already reflected by the time execution
+            # reaches here.
             table_click_state = st.session_state.get("qa_table_select")
             if table_click_state:
                 cells = (table_click_state.get("selection") or {}).get("cells") or []
                 if cells:
                     row_idx, col_name = cells[0]
-                    if col_name not in ("Player", "Game") and row_idx < len(consolidated_df):
+                    if (col_name not in ("Player", "Game") and row_idx < len(consolidated_df)
+                            and _consume_new_click("qa_table_select", (row_idx, col_name))):
                         clicked_row = consolidated_df.iloc[row_idx]
-                        _update_highlight_if_changed({
+                        _toggle_selection({
                             "player": clicked_row.get("Player"),
                             "game": clicked_row.get("Game"),
                             "metric": col_name,
                         })
 
-            highlight = st.session_state.qa_highlight
-            formatted_table = format_tidy_table(consolidated_df, tree, highlight=highlight)
+            selections = st.session_state.qa_selections
+            formatted_table = format_tidy_table(consolidated_df, tree, selections=selections)
             st.dataframe(
                 formatted_table, use_container_width=True, hide_index=True,
                 on_select="rerun", selection_mode=["single-cell"], key="qa_table_select",
             )
 
-            if highlight.get("player") or highlight.get("game"):
-                parts = [v for v in (highlight.get("player"), highlight.get("game"), highlight.get("metric")) if v]
-                st.caption(f"🔗 Linked selection: **{' / '.join(parts)}**")
+            if selections:
+                parts = "; ".join(
+                    " / ".join(v for v in (sel.get("player"), sel.get("game"), sel.get("metric")) if v)
+                    for sel in selections
+                )
+                st.caption(f"🔗 Linked selections: **{parts}**")
 
             with st.expander("💡 Table Provenance & Metric Contracts"):
                 st.markdown("This view consolidates data computed from the **Committed Knowledge Base**: ")
@@ -1325,13 +1395,20 @@ with tab_qa:
         # qa_encodings = {} reset alongside qa_action_results above) --
         # so switching questions never carries over a stale override, but
         # tweaking the dropdowns below persists across reruns of the SAME
-        # question. Clicking a bar highlights the matching table cell (and
-        # vice versa) via the shared qa_highlight state -- see
-        # _update_highlight_if_changed and the table section above.
+        # question. Clicking a bar toggles it into/out of the matching
+        # table cell's selection (and vice versa) via the shared
+        # qa_selections list -- see _toggle_selection and the table
+        # section above. Several bars/cells can be selected at once, each
+        # in its own color, listed in the "Selections" key alongside the
+        # existing per-player "Player Key".
         if valid_action_results:
             with st.expander("📈 Interactive Visualizations", expanded=True):
                 qa_encodings = st.session_state.qa_encodings
-                highlight = st.session_state.qa_highlight
+                selections = st.session_state.qa_selections
+                highlights = [
+                    (sel["color"], {"player": sel.get("player"), "game": sel.get("game"), "metric": sel.get("metric")})
+                    for sel in selections
+                ]
                 player_color_map = get_player_color_map(known_player_pool)
 
                 col_charts, col_key = st.columns([5, 1])
@@ -1346,6 +1423,28 @@ with tab_qa:
                             f'</span><span style="font-size:0.85em;color:{UMD_WHITE};">{player}</span></div>',
                             unsafe_allow_html=True,
                         )
+
+                    st.markdown("**Selections**")
+                    if not selections:
+                        st.caption("Click a table cell or a bar to select it.")
+                    for sel_idx, sel in enumerate(selections):
+                        label = " / ".join(
+                            v for v in (sel.get("player"), sel.get("game"), sel.get("metric")) if v
+                        ) or "(selection)"
+                        col_swatch, col_remove = st.columns([4, 1])
+                        col_swatch.markdown(
+                            f'<div style="display:flex;align-items:center;margin-bottom:4px;">'
+                            f'<span style="display:inline-block;width:14px;height:14px;'
+                            f'background-color:{sel["color"]};border:1px solid {UMD_WHITE};margin-right:6px;">'
+                            f'</span><span style="font-size:0.8em;color:{UMD_WHITE};">{label}</span></div>',
+                            unsafe_allow_html=True,
+                        )
+                        if col_remove.button("✕", key=f"qa_sel_remove_{sel_idx}"):
+                            st.session_state.qa_selections.pop(sel_idx)
+                            st.rerun()
+                    if selections and st.button("Clear all selections", key="qa_sel_clear_all"):
+                        st.session_state.qa_selections = []
+                        st.rerun()
 
                 with col_charts:
                     for i, item in enumerate(valid_action_results):
@@ -1414,7 +1513,7 @@ with tab_qa:
 
                         panels = render_encoded_panels(
                             result_df, encoding, value_col="Value",
-                            color_map=player_color_map, highlight=highlight,
+                            color_map=player_color_map, highlights=highlights,
                         )
                         if not panels:
                             st.info("No computable values for this chart.")
@@ -1443,13 +1542,18 @@ with tab_qa:
                                 # widget" idiom as the table's click handling
                                 # above) -- resolve it against THIS run's figure
                                 # (same data/encoding, so the trace layout
-                                # matches) and update the shared highlight.
+                                # matches) and toggle it into/out of the
+                                # shared selection list.
                                 prior_click = st.session_state.get(panel_key)
                                 if prior_click:
                                     points = (prior_click.get("selection") or {}).get("points") or []
-                                    clicked = resolve_clicked_point(points, encoding, fig, panel_metric)
-                                    if clicked:
-                                        _update_highlight_if_changed(clicked)
+                                    if points:
+                                        point = points[0]
+                                        click_sig = (point.get("curve_number"), point.get("x"), point.get("y"))
+                                        if _consume_new_click(panel_key, click_sig):
+                                            clicked = resolve_clicked_point(points, encoding, fig, panel_metric)
+                                            if clicked:
+                                                _toggle_selection(clicked)
 
                                 panel_title_display = title if len(panels) == 1 else f"{title} — {panel_title}"
                                 fig.update_layout(**PLOTLY_BASE, title=panel_title_display, showlegend=False)
