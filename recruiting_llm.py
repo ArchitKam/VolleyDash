@@ -52,7 +52,7 @@ class LLMUnavailableError(Exception):
     failure the same way."""
 
 
-def call_llm(system_prompt: str, user_message: str, max_tokens: int = 1536,
+def call_llm(system_prompt: str, user_message: str, max_tokens: int = 2048,
              temperature: float = 0.1) -> str:
     """
     One blocking, non-streaming chat completion against Groq's API,
@@ -68,6 +68,19 @@ def call_llm(system_prompt: str, user_message: str, max_tokens: int = 1536,
     (connection/timeout, auth, a transient 5xx) fails immediately without
     trying the fallbacks, since those affect Groq/the account as a whole,
     not just one model -- retrying a different model wouldn't help.
+
+    Both LLM_MODEL and every entry in LLM_FALLBACK_MODELS are "gpt-oss"
+    reasoning models: by default they spend a chunk of max_tokens on a
+    hidden chain-of-thought BEFORE writing the actual JSON answer, and
+    that hidden reasoning counts against the same token budget as the
+    visible response -- confirmed truncation mid-response (e.g. a
+    multi-action router query cut off mid-string) was traced to exactly
+    this, not to max_tokens being too low for the JSON itself. Neither
+    feature here needs step-by-step reasoning (routing and formula
+    authoring are both "map this phrase onto one of a fixed set of known
+    options"), so reasoning_effort="low" plus include_reasoning=False
+    (Groq-specific, passed via extra_body since it isn't a typed OpenAI
+    param) keep nearly the whole budget available for the answer itself.
 
     Raises LLMUnavailableError on a missing API key, or once every model
     in the chain has been tried and failed. Callers already treat
@@ -100,6 +113,8 @@ def call_llm(system_prompt: str, user_message: str, max_tokens: int = 1536,
                 ],
                 max_tokens=max_tokens,
                 temperature=temperature,
+                reasoning_effort="low",
+                extra_body={"include_reasoning": False},
             )
             break
         except (RateLimitError, NotFoundError) as e:
