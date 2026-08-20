@@ -1,3 +1,4 @@
+#omsairam omsairam omsairam 
 """
 recruiting_operations.py
 =========================
@@ -233,7 +234,7 @@ def _apply_reduce(df: pd.DataFrame, op: Reduce) -> tuple:
     out = (work.groupby(keep, dropna=False)
                 .agg(Value=("Value", how), **{"N Used": ("Value", "count")})
                 .reset_index())
-    out[op.axis] = out["N Used"].map(lambda n: f"{op.how} of {n} {op.axis.lower()}(s)")
+    out[op.axis] = f"{op.how} of {op.axis.lower()}s"
     return out, None
 
 
