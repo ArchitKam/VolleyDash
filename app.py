@@ -84,6 +84,24 @@ def get_player_color_map(known_player_pool: List[str]) -> dict:
         for i, player in enumerate(sorted(known_player_pool))
     }
 
+
+def _clear_chart_encoding_widgets() -> None:
+    """The chart encoding controls (Group by/Color by/Split into panels/
+    order) are Streamlit widgets keyed only by action INDEX
+    (qa_enc_position_i etc.), not by question -- so once a widget with a
+    given key has been rendered, Streamlit keeps returning whatever the
+    coach last picked for that key on every future rerun, regardless of
+    the `index=` this code passes in. Resetting qa_encodings = {} alone
+    only clears OUR OWN cache dict; it does nothing to that underlying
+    widget state. Without also wiping it here, a manual override on some
+    earlier question's action 0 chart would keep silently overriding
+    default_encoding() (Game -> position, Player -> color, Metric ->
+    facet) for every later question's action 0 too. Called every time
+    qa_encodings is reset so the documented default is the REAL default,
+    not one a stale click can quietly override."""
+    for key in [k for k in st.session_state if k.startswith("qa_enc_")]:
+        del st.session_state[key]
+
 QA_SAMPLE_QUESTIONS = [
     "What is Sloan's Kills Per Set in the Vegas Aces game?",
     "How was Sloan's serving throughout all games?",
@@ -1011,6 +1029,7 @@ with tab_qa:
             st.session_state.qa_last_decomposition = decomposition
             st.session_state.qa_action_results = action_results
             st.session_state.qa_encodings = {}
+            _clear_chart_encoding_widgets()
             st.session_state.qa_player_filter = []
             for _player in known_player_pool:
                 st.session_state.pop(f"qa_playerfilter_{_player}", None)
@@ -1035,6 +1054,7 @@ with tab_qa:
             )
             st.session_state.qa_action_results = action_results
             st.session_state.qa_encodings = {}
+            _clear_chart_encoding_widgets()
 
         valid_action_results = [item for item in action_results if "error" not in item and item.get("status") != "missing_metric"]
         missing_metric_actions = [item for item in action_results if item.get("status") == "missing_metric"]
