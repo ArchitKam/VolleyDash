@@ -248,11 +248,16 @@ def test_rank_highest_kills_per_set(real_tree, synthetic_games):
     }
     results = _run_repaired_actions(raw, real_tree, synthetic_games, KNOWN_PLAYERS)
     df = results[0]["result_df"]
-    assert len(df) == 1
+    # Rank always keeps at least 3 candidates per group (fewer only when
+    # the group itself has fewer -- here there are only 2 synthetic
+    # players total, so both show up even though the pipeline asked for
+    # limit=1), and the group is always sorted best-first.
+    assert len(df) == 2
     top = df.iloc[0]
     assert top["Player"] == "#22 Azana S."  # mean 3.5556 > Sloan's 3.1667
     assert math.isclose(top["Value"], (8/3 + 15/3 + 6/2) / 3, rel_tol=1e-9)
     assert top["N Used"] == 3
+    assert df.iloc[1]["Player"] == "#7 Sloan T."
 
 
 # ──────────────────────────────────────────────────────────────

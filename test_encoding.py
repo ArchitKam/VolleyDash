@@ -195,7 +195,7 @@ def test_render_applies_color_map_per_trace():
 def test_render_highlight_outlines_only_the_matching_bar():
     df = _comparison_df()
     enc = EncodingAssignment(position="Game", color="Player")
-    highlights = [("#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None})]
+    highlights = [("#1", "#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None})]
     _, fig = render(df, enc, highlights=highlights)[0]
 
     sloan_trace = next(t for t in fig.data if t.name == "Sloan")
@@ -219,7 +219,7 @@ def test_render_highlight_only_applies_to_the_matching_facet_panel():
                 rows.append({"Player": player, "Game": game, "Metric": metric, "Value": 1})
     df = _df(rows)
     enc = EncodingAssignment(position="Game", color="Player", facet="Metric")
-    highlights = [("#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": "Kills Per Set"})]
+    highlights = [("#1", "#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": "Kills Per Set"})]
 
     panels = render(df, enc, highlights=highlights)
     by_title = dict(panels)
@@ -234,6 +234,44 @@ def test_render_highlight_only_applies_to_the_matching_facet_panel():
         assert trace.marker.line.width is None
 
 
+def test_render_position_axis_defaults_to_value_sorted_order():
+    # "value" (the dataclass default) sorts EVERY position axis by Value
+    # descending, not just Game -- so a Rank'd pipeline result's order
+    # carries straight into the chart without an extra step.
+    df = _df([
+        {"Player": "Sloan", "Value": 5},
+        {"Player": "Kendal", "Value": 12},
+        {"Player": "Azana", "Value": 8},
+    ])
+    enc = EncodingAssignment(position="Player")
+    _, fig = render(df, enc)[0]
+    assert list(fig.data[0].x) == ["Kendal", "Azana", "Sloan"]
+
+
+def test_render_position_axis_original_order_preserves_row_order():
+    df = _df([
+        {"Player": "Sloan", "Value": 5},
+        {"Player": "Kendal", "Value": 12},
+        {"Player": "Azana", "Value": 8},
+    ])
+    enc = EncodingAssignment(position="Player", game_order="original")
+    _, fig = render(df, enc)[0]
+    assert list(fig.data[0].x) == ["Sloan", "Kendal", "Azana"]
+
+
+def test_render_highlight_stamps_badge_annotation_on_the_matching_bar():
+    df = _comparison_df()
+    enc = EncodingAssignment(position="Game", color="Player", game_order="original")
+    highlights = [("#1", "#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None})]
+    _, fig = render(df, enc, highlights=highlights)[0]
+
+    assert len(fig.layout.annotations) == 1
+    annotation = fig.layout.annotations[0]
+    assert annotation.text == "#1"
+    assert annotation.x == "Vegas Aces"
+    assert annotation.font.color == "#00BFFF"
+
+
 def test_render_no_highlight_leaves_figures_plain():
     df = _comparison_df()
     enc = EncodingAssignment(position="Game", color="Player")
@@ -244,10 +282,14 @@ def test_render_no_highlight_leaves_figures_plain():
 
 def test_render_multiple_highlights_each_get_their_own_color():
     df = _comparison_df()
-    enc = EncodingAssignment(position="Game", color="Player")
+    # game_order="original" -- pin row order explicitly so this test's own
+    # index assumptions (Vegas Aces=0, Mavs 816=1) hold regardless of the
+    # "value" order default (see test_render_position_axis_defaults_to_
+    # value_sorted_order below, which covers that default specifically).
+    enc = EncodingAssignment(position="Game", color="Player", game_order="original")
     highlights = [
-        ("#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
-        ("#39FF14", {"player": "Kendal", "game": "Mavs 816", "metric": None}),
+        ("#1", "#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
+        ("#2", "#39FF14", {"player": "Kendal", "game": "Mavs 816", "metric": None}),
     ]
     _, fig = render(df, enc, highlights=highlights)[0]
 
@@ -268,8 +310,8 @@ def test_render_two_highlights_on_the_same_bar_the_later_one_wins():
     df = _comparison_df()
     enc = EncodingAssignment(position="Game", color="Player")
     highlights = [
-        ("#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
-        ("#39FF14", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
+        ("#1", "#00BFFF", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
+        ("#2", "#39FF14", {"player": "Sloan", "game": "Vegas Aces", "metric": None}),
     ]
     _, fig = render(df, enc, highlights=highlights)[0]
     sloan_trace = next(t for t in fig.data if t.name == "Sloan")

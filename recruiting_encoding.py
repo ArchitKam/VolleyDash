@@ -114,16 +114,21 @@ def set_game_order(current: EncodingAssignment, order: str) -> EncodingAssignmen
 
 
 def _apply_highlights(fig: go.Figure, encoding: EncodingAssignment,
-                       highlights: List[Tuple[str, Dict[str, Optional[str]]]]) -> None:
+                       highlights: List[Tuple[str, str, Dict[str, Optional[str]]]]) -> None:
     """
-    Outlines whichever bar(s) match each (outline_color, highlight) pair
-    with a thick border in THAT selection's own color -- fill color stays
-    whatever the color axis already assigned (identity: "this bar is
-    Sloan's"), only the outline changes (selection: "this is one of the
-    things that was clicked"). Several independent selections can be lit
-    up at once, each in its own color (see app.py's qa_selections); if two
-    selections both match the same bar, the later one in the list wins
-    that bar's outline. An axis this chart doesn't actually encode is a
+    Outlines whichever bar(s) match each (badge, outline_color, highlight)
+    triple with a thick border in THAT selection's own color, AND stamps
+    the same badge text (e.g. "#2") just above the bar in that color --
+    fill color stays whatever the color axis already assigned (identity:
+    "this bar is Sloan's"), only the outline/badge change (selection:
+    "this is the thing tagged #2 in the table and the Selections list").
+    The badge is what actually makes a chart click and a table click read
+    as the SAME thing at a glance -- a border color alone asks the viewer
+    to match two colors by eye across a whole screen; a shared number
+    doesn't. Several independent selections can be lit up at once, each
+    in its own color/badge (see app.py's qa_selections); if two selections
+    both match the same bar, the later one in the list wins that bar's
+    outline/badge. An axis this chart doesn't actually encode is a
     wildcard (matches anything), so e.g. a highlight with no "player"
     opinion doesn't prevent a Game-only match from lighting up.
     """
@@ -134,11 +139,12 @@ def _apply_highlights(fig: go.Figure, encoding: EncodingAssignment,
 
     for trace in fig.data:
         xs = list(trace.x) if trace.x is not None else []
+        ys = list(trace.y) if trace.y is not None else []
         if not xs:
             continue
 
         relevant = [
-            (outline_color, h) for outline_color, h in highlights
+            (badge, outline_color, h) for badge, outline_color, h in highlights
             if not (color_key and h.get(color_key) is not None and trace.name != h.get(color_key))
         ]
         if not relevant:
@@ -146,19 +152,25 @@ def _apply_highlights(fig: go.Figure, encoding: EncodingAssignment,
 
         widths = [0] * len(xs)
         colors = ["rgba(0,0,0,0)"] * len(xs)
-        for outline_color, h in relevant:
+        for badge, outline_color, h in relevant:
             wanted_position = h.get(position_key) if position_key else None
             for idx, x_val in enumerate(xs):
                 if position_key is None or wanted_position is None or x_val == wanted_position:
                     widths[idx] = HIGHLIGHT_OUTLINE_WIDTH
                     colors[idx] = outline_color
+                    if idx < len(ys) and ys[idx] is not None:
+                        fig.add_annotation(
+                            x=x_val, y=ys[idx], text=badge, showarrow=False, yshift=16,
+                            font=dict(color=outline_color, size=13, family="sans-serif"),
+                            bgcolor="rgba(0,0,0,0.6)", borderpad=2,
+                        )
         trace.marker.line.width = widths
         trace.marker.line.color = colors
 
 
 def _one_figure(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str,
                  color_map: Optional[Dict[str, str]] = None,
-                 highlights: Optional[List[Tuple[str, Dict[str, Optional[str]]]]] = None) -> go.Figure:
+                 highlights: Optional[List[Tuple[str, str, Dict[str, Optional[str]]]]] = None) -> go.Figure:
     # position=None only happens when there was nothing to encode at all
     # (see default_encoding) or a manual override cleared it -- fall back
     # to color as the x-axis so a lone color-only assignment still plots
@@ -216,7 +228,7 @@ def resolve_clicked_point(points: List[dict], encoding: EncodingAssignment, fig:
 
 def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Value",
            color_map: Optional[Dict[str, str]] = None,
-           highlights: Optional[List[Tuple[str, Dict[str, Optional[str]]]]] = None) -> List[Tuple[str, go.Figure]]:
+           highlights: Optional[List[Tuple[str, str, Dict[str, Optional[str]]]]] = None) -> List[Tuple[str, go.Figure]]:
     """
     Renders df per encoding into one or more Plotly figures -- one entry
     normally, one per distinct facet value if encoding.facet is set.
@@ -224,23 +236,27 @@ def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Val
     nothing about Streamlit layout -- the caller decides how to arrange
     multiple panels (st.columns, tabs, whatever fits).
 
-    `highlights`, if given, is a list of (outline_color, highlight_dict)
-    pairs -- one per active brushing-and-linking selection, each in its
-    own color (see app.py's qa_selections) -- so several bars/cells can be
-    lit up at once instead of only ever one. Each pair only actually gets
-    applied to the panel whose facet value matches its own
-    highlight_dict["metric"] (when faceted by Metric) -- a selection for
-    "Kills Per Set" shouldn't light up a bar in the "Aces Per Set" panel
-    just because both happen to share a player/game.
+    `highlights`, if given, is a list of (badge, outline_color,
+    highlight_dict) triples -- one per active brushing-and-linking
+    selection, each with its own badge/color (see app.py's qa_selections)
+    -- so several bars/cells can be lit up at once instead of only ever
+    one. Each triple only actually gets applied to the panel whose facet
+    value matches its own highlight_dict["metric"] (when faceted by
+    Metric) -- a selection for "Kills Per Set" shouldn't light up a bar in
+    the "Aces Per Set" panel just because both happen to share a
+    player/game.
     """
     valid = df[df[value_col].notna()].copy()
     if valid.empty:
         return []
 
-    if encoding.position == "Game" and encoding.game_order == "original":
-        game_order_values = list(dict.fromkeys(valid["Game"]))
-        valid["Game"] = pd.Categorical(valid["Game"], categories=game_order_values, ordered=True)
-        valid = valid.sort_values("Game")
+    if encoding.position is not None:
+        if encoding.game_order == "original":
+            order_values = list(dict.fromkeys(valid[encoding.position]))
+            valid[encoding.position] = pd.Categorical(valid[encoding.position], categories=order_values, ordered=True)
+            valid = valid.sort_values(encoding.position)
+        else:  # "value" -- highest first, so a Rank'd result's order carries straight into the chart
+            valid = valid.sort_values(value_col, ascending=False, na_position="last")
 
     if encoding.facet is None:
         return [("", _one_figure(valid, encoding, value_col, color_map, highlights))]
@@ -252,7 +268,7 @@ def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Val
         panel_highlights = None
         if highlights:
             relevant = [
-                (outline_color, h) for outline_color, h in highlights
+                (badge, outline_color, h) for badge, outline_color, h in highlights
                 if not (facet_key and h.get(facet_key) is not None and h.get(facet_key) != facet_value)
             ]
             panel_highlights = relevant or None

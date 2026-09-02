@@ -85,4 +85,30 @@ out,notes = run_pipeline(df, [])
 assert out.equals(df) and not notes
 print("empty pipeline is a no-op (backwards compatible)")
 
+# Rank must rank WITHIN each remaining-axis group, not across the whole
+# frame -- a skill-group category result carries several metrics at once
+# (Metric stays a real column, never reduced away), so Rank(axis=Player)
+# has to treat each metric independently. Before this fix, a global
+# sort+head mixed every metric's rows together and condensed the whole
+# category down to `limit` rows total, starving every metric but one.
+category_rows = []
+for metric, vals in (("Kills", kills), ("Passing quality", passing)):
+    for player, series in vals.items():
+        category_rows.append({"Metric": metric, "Game": "G1", "Player": player, "Value": series[0]})
+category_df = pd.DataFrame(category_rows)
+out,_ = run_pipeline(category_df, [Rank("Player", limit=1)])
+assert set(out["Metric"].unique()) == {"Kills", "Passing quality"}, (
+    "Ranking a multi-metric (category) result must keep EVERY metric, not condense to one."
+)
+print("category rank keeps every metric independently (no more condensing to one number)")
+
+# Rank always shows at least 3 per group, even when limit asks for fewer --
+# "who's the highest" reads better with a little context than as one bare
+# number. (Reduce("Game","mean") first collapses to one row per player,
+# same as the "top 1"/"top 2" questions above, so there's exactly one
+# group here and `limit` alone would otherwise decide the row count.)
+out,_ = run_pipeline(df, [Slice("Metric", keep=["Passing quality"]), Reduce("Game","mean"), Rank("Player", limit=1)])
+assert len(out) == 3, "Rank(limit=1) with 3 candidates in the group should still show all 3 (floor of 3)."
+print("rank floor of 3 applied even when a smaller limit was requested")
+
 print("\nALL 10 COACH QUESTIONS EXPRESSED AS COMPOSITIONS -- ZERO NEW FUNCTIONS")

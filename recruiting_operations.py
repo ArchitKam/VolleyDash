@@ -139,7 +139,8 @@ class Rank:
 
     def describe(self) -> str:
         direction = "highest" if self.descending else "lowest"
-        return f"{direction} {self.limit or 'all'} by {self.axis}"
+        shown = max(3, self.limit) if self.limit is not None else 3
+        return f"{direction} {shown} by {self.axis}"
 
 
 @dataclass(frozen=True)
@@ -239,15 +240,48 @@ def _apply_reduce(df: pd.DataFrame, op: Reduce) -> tuple:
 
 
 def _apply_rank(df: pd.DataFrame, op: Rank) -> tuple:
+    """
+    Ranks WITHIN each remaining-axis group, not across the whole frame --
+    e.g. Rank(axis="Player") on a category result (every metric in a
+    skill group at once, or several metrics a pipeline pulled in
+    together) ranks each Metric's (and Game's) players independently.
+    Without this, a "top server" question would sort Serve SA rows
+    against Serve Rtg. rows in one global pile and keep only a handful
+    of rows total across every metric -- exactly the "everything
+    condenses to one number" symptom. Grouping by the same remaining
+    axes a multi-metric result already carries makes ranking a category
+    behave identically to ranking N separate single-metric actions.
+
+    Always keeps at least 3 rows per group (more if op.limit asks for
+    more) -- "who's the highest" reads better with a little context than
+    as one bare number, and a short list costs nothing extra to show. A
+    group with fewer than 3 candidates just shows all of it.
+    """
     if op.axis not in df.columns:
         return df, f"Can't rank on '{op.axis}' -- not a column in this result."
     work = df.copy()
     work["Value"] = pd.to_numeric(work["Value"], errors="coerce")
+    effective_limit = max(3, op.limit) if op.limit is not None else 3
+
+    group_cols = _remaining_axes(work, op.axis)
     # na_position="last" so missing data never wins a "highest" ranking.
+    # A global sort by Value first means every per-group subset pulled out
+    # afterward is already correctly ordered by Value too, regardless of
+    # sort stability -- filtering rows out of a Value-sorted sequence
+    # can't un-sort them.
     work = work.sort_values("Value", ascending=not op.descending, na_position="last")
-    if op.limit is not None:
-        work = work.head(op.limit)
-    return work.reset_index(drop=True), None
+
+    if not group_cols:
+        return work.head(effective_limit).reset_index(drop=True), None
+
+    ranked = work.groupby(group_cols, dropna=False, sort=False, group_keys=False).head(effective_limit)
+    # Re-sort so same-group rows sit together in the displayed/plotted
+    # order (grouped-then-ranked reads far better than the interleaved
+    # order a pure global sort would leave them in).
+    ranked = ranked.sort_values(
+        group_cols + ["Value"], ascending=[True] * len(group_cols) + [not op.descending], na_position="last",
+    )
+    return ranked.reset_index(drop=True), None
 
 
 def _apply_compare(df: pd.DataFrame, op: Compare) -> tuple:
