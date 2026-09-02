@@ -1,5 +1,4 @@
 #omsairam omsairam omsairam 
-
 """
 app.py
 ======
@@ -43,14 +42,6 @@ from recruiting_encoding import (
     set_game_order, slot_options, render as render_encoded_panels,
 )
 
-# Bridge Streamlit secrets into the environment before recruiting_llm.py
-# reads them -- that module stays Streamlit-agnostic (so it's directly
-# importable/testable, as test_integration.py already does) and reads
-# GROQ_API_KEY from os.environ only. recruiting_data_store.py handles its
-# own secrets (GITHUB_DATA_REPO/GITHUB_DATA_TOKEN) directly via st.secrets,
-# so nothing to bridge for those. Wrapped in try/except since st.secrets
-# raises (rather than behaving like an empty dict) when no secrets.toml
-# exists at all -- e.g. local dev with credentials only in the shell env.
 try:
     if "GROQ_API_KEY" not in os.environ and "GROQ_API_KEY" in st.secrets:
         os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
@@ -67,23 +58,8 @@ UMD_GOLD = "#B8860B"
 UMD_WHITE = "#FFFFFF"
 UMD_CYCLE = [UMD_RED, UMD_GOLD, UMD_WHITE]
 
-# A richer Maryland-flavored cycle for per-player chart colors -- more
-# entries than UMD_CYCLE since a roster can have well over 3 players and
-# each one needs a color that stays visually distinct from its neighbors
-# in the cycle, while still reading as "this app's palette" rather than
-# Plotly's generic default.
 UMD_PLAYER_PALETTE = [
     UMD_RED, UMD_GOLD, "#8B0000", "#DAA520", UMD_WHITE, "#A9A9A9", "#FF6B6B", "#F0C300",
-]
-
-# Colors for click-driven brushing-and-linking selections -- deliberately
-# NOT the player palette above, since a selection's color means "this is
-# the 2nd thing you clicked," not "this is Sloan" (a selection and a
-# player color living in the same space would be confusing wherever they
-# happened to collide). Bright/light so black text stays legible over an
-# exact-cell-match background (see format_tidy_table).
-SELECTION_PALETTE = [
-    "#00BFFF", "#39FF14", "#FFA500", "#FF69B4", "#00FFFF", "#FFFF00", "#DA70D6", "#7CFC00",
 ]
 
 PLOTLY_BASE = dict(
@@ -94,9 +70,6 @@ PLOTLY_BASE = dict(
     yaxis=dict(color=UMD_WHITE, gridcolor="#333333"),
 )
 
-# Small Maryland-themed chrome: a red accent under headers/subheaders and
-# a gold-tinted divider, instead of Streamlit's default plain-gray look --
-# purely cosmetic, doesn't touch any widget behavior.
 st.markdown(f"""
 <style>
 h1, h2, h3 {{ border-bottom: 2px solid {UMD_RED}; padding-bottom: 0.2em; }}
@@ -106,11 +79,6 @@ hr {{ border-top: 1px solid {UMD_GOLD}; }}
 
 
 def get_player_color_map(known_player_pool: List[str]) -> dict:
-    """Deterministic Player -> color assignment (sorted names, cycled
-    through UMD_PLAYER_PALETTE) so the SAME player gets the SAME color on
-    every chart/panel and matches the color key -- never re-picked per
-    figure, which would make "red = Sloan" true in one chart and false in
-    the next."""
     return {
         player: UMD_PLAYER_PALETTE[i % len(UMD_PLAYER_PALETTE)]
         for i, player in enumerate(sorted(known_player_pool))
@@ -124,9 +92,7 @@ QA_SAMPLE_QUESTIONS = [
 
 
 # ──────────────────────────────────────────────────────────────
-# GAME SUPPORT -- listing/fetching itself lives in recruiting_data_store.py
-# (GameInfo, get_games, load_game_df); this is just the pure hint-matching
-# logic, which never touches storage so it stays here.
+# GAME SUPPORT 
 # ──────────────────────────────────────────────────────────────
 
 def _word_prefix_match(hint_words: List[str], name_words: List[str]) -> bool:
@@ -200,20 +166,20 @@ class RowPick:
 
 
 def pick_example_row(df: pd.DataFrame, referenced_cols: List[str],
-                      name_col: str = "Name") -> RowPick:
+                     name_col: str = "Name") -> RowPick:
     if name_col not in df.columns:
         return RowPick(row=None, row_label=None, used_fallback_zero=False,
-                        error=f"'{name_col}' column not found in the CSV.")
+                       error=f"'{name_col}' column not found in the CSV.")
 
     player_rows = df[df[name_col].astype(str).str.strip().str.startswith("#")]
     if player_rows.empty:
         return RowPick(row=None, row_label=None, used_fallback_zero=False,
-                        error="No player rows found (all rows looked like team aggregates).")
+                       error="No player rows found (all rows looked like team aggregates).")
 
     missing_cols = [c for c in referenced_cols if c not in df.columns]
     if missing_cols:
         return RowPick(row=None, row_label=None, used_fallback_zero=False,
-                        error=f"Column(s) not found in CSV: {', '.join(missing_cols)}")
+                       error=f"Column(s) not found in CSV: {', '.join(missing_cols)}")
 
     best_row = None
     best_blanks: List[str] = []
@@ -221,12 +187,12 @@ def pick_example_row(df: pd.DataFrame, referenced_cols: List[str],
         blanks = [c for c in referenced_cols if coerce_cell_to_float(row[c]) is None]
         if not blanks:
             return RowPick(row=row, row_label=str(row[name_col]),
-                            used_fallback_zero=False, blank_columns=[])
+                           used_fallback_zero=False, blank_columns=[])
         if best_row is None or len(blanks) < len(best_blanks):
             best_row, best_blanks = row, blanks
 
     return RowPick(row=best_row, row_label=str(best_row[name_col]),
-                    used_fallback_zero=True, blank_columns=best_blanks)
+                   used_fallback_zero=True, blank_columns=best_blanks)
 
 
 _ALLOWED_AST_NODES = (
@@ -253,7 +219,7 @@ def safe_eval_arithmetic(expr: str) -> float:
 
 
 def build_substituted_expr(formula_expr: str, row: pd.Series,
-                            fallback_zero_cols: Optional[List[str]] = None) -> Tuple[str, List[str]]:
+                           fallback_zero_cols: Optional[List[str]] = None) -> Tuple[str, List[str]]:
     fallback_zero_cols = set(fallback_zero_cols or [])
     missing: List[str] = []
 
@@ -465,12 +431,6 @@ def run_category_query(
 
 
 def _pipeline_referenced_metrics(pipeline: List[Operation]) -> Set[str]:
-    """Every metric NAME a pipeline's Slice predicates reference. Reduce/
-    Rank/Compare only ever operate on an axis (Player/Game/Metric), never
-    name a metric directly -- only a Slice's ValuePredicate can point at a
-    metric OTHER than the one already being computed (e.g. slicing Passing
-    by a Kills threshold, so Kills has to be fetched too even though the
-    coach only wants to see Passing)."""
     referenced: Set[str] = set()
     for op in pipeline:
         if isinstance(op, Slice) and op.predicate is not None:
@@ -482,31 +442,6 @@ def prepare_pipeline_frame(
     result_df: pd.DataFrame, pipeline: List[Operation], primary_metric_label: Optional[str],
     tree: KnowledgeTree, game_dfs: List[Tuple["GameInfo", pd.DataFrame]],
 ) -> Tuple[pd.DataFrame, List[str]]:
-    """
-    Only called when an action's pipeline is non-empty (an action with no
-    pipeline never reaches this, so a plain single-metric/category query's
-    result_df is untouched -- byte-for-byte the same as before this
-    feature existed).
-
-    Ensures result_df carries a "Metric" column (tagging it with
-    primary_metric_label when it doesn't already have one -- category
-    results already do, from run_category_query), then fetches any
-    ADDITIONAL metric the pipeline references via a cross-metric Slice
-    predicate and concatenates it in, so run_pipeline always sees one
-    consistent long frame no matter how many distinct metrics it actually
-    touches.
-
-    The extra fetch is always player-UNFILTERED (every player in
-    game_dfs), matching how the caller already fetched result_df itself
-    whenever a pipeline is present (see the action-execution loop in the
-    Q&A tab): a Compare/Rank/Reduce across the Player axis needs the FULL
-    player set to mean anything ("team average", "who's highest"), so
-    player-narrowing the coach actually asked for is expressed as an
-    explicit Slice(axis="Player", ...) step in the pipeline instead of a
-    fetch-time filter -- see the caller for where that step comes from
-    (either straight from the router, or auto-appended when the coach
-    named a player and the pipeline didn't already narrow one).
-    """
     notes: List[str] = []
     if "Metric" not in result_df.columns:
         result_df = result_df.copy()
@@ -530,10 +465,7 @@ def prepare_pipeline_frame(
 
 
 # ──────────────────────────────────────────────────────────────
-# ACTION EXECUTION -- resolves + runs every action in an already-
-# decomposed query. Pulled out of the "Ask a Question" submit handler so
-# the SAME logic can re-run a cached decomposition with a different
-# player selection (Player Key clicks) without a second LLM round-trip.
+# ACTION EXECUTION 
 # ──────────────────────────────────────────────────────────────
 
 def execute_query_actions(
@@ -541,20 +473,6 @@ def execute_query_actions(
     known_player_pool: List[str], selected_games: List[GameInfo],
     player_filter: Optional[List[str]] = None,
 ) -> List[dict]:
-    """
-    Runs every action in an already-decomposed query (see
-    decompose_recruiting_query) against the real data. No LLM call here --
-    pure resolution + execution over a decomposition the router already
-    produced.
-
-    `player_filter`, when given a non-empty list, REPLACES whatever player
-    each action itself named (a single hint, several hints merged into one
-    action, or none at all) with exactly that player set -- this is what
-    lets the Player Key re-run "the same question" for a newly toggled
-    player selection without going back through the router: the metric/
-    game/pipeline shape of each action is preserved, only the player
-    dimension changes.
-    """
     unrecognized_lower = {t.lower() for t in decomposition.get("unrecognized_terms", [])}
     action_results = []
     for action in decomposition.get("actions", []):
@@ -570,11 +488,6 @@ def execute_query_actions(
             leaf = find_leaf_by_exact_label(tree, action.get("metric_of_interest"))
             if leaf is None or leaf.spec is None:
                 raw_metric_name = action.get("metric_of_interest") or "Unknown Metric"
-                # The router itself already tells us, structurally, whether
-                # it considered this term unrecognized (gibberish) vs a
-                # plausible new metric name it made up in good faith --
-                # trust that signal rather than re-guessing from the
-                # string ourselves.
                 is_gibberish = raw_metric_name.strip().lower() in unrecognized_lower
                 action_results.append({
                     "action": action,
@@ -588,11 +501,6 @@ def execute_query_actions(
             resolved_player = player_filter[0] if len(player_filter) == 1 else None
             multi_players = player_filter if len(player_filter) >= 2 else None
         else:
-            # action.get("player") is usually a single raw hint string, but
-            # merge_same_shape_actions (recruiting_llm.py) can also hand
-            # back a LIST of raw hints -- each needs resolving individually
-            # against the real roster (only known_player_pool, built from
-            # the real CSVs, can do that).
             raw_player = action.get("player")
             if isinstance(raw_player, list):
                 resolved_players = []
@@ -602,10 +510,6 @@ def execute_query_actions(
                     if candidate is not None and candidate not in seen_players:
                         seen_players.add(candidate)
                         resolved_players.append(candidate)
-                # 2+ genuinely distinct resolved players -> a real multi-
-                # player merge. 0 or 1 collapses to ordinary single-
-                # player/no-player behavior -- never a fabricated
-                # distinction.
                 multi_players = resolved_players if len(resolved_players) >= 2 else None
                 resolved_player = resolved_players[0] if len(resolved_players) == 1 else None
             else:
@@ -624,12 +528,8 @@ def execute_query_actions(
             action_games = selected_games
 
         game_dfs = [(g, load_game_df(g.path)) for g in action_games]
-        # Whenever a pipeline is present (or players are being merged/
-        # overridden), fetch EVERY player -- a Reduce/Rank/Compare across
-        # the Player axis needs the full player set to be meaningful.
-        # Player-narrowing is applied as an explicit pipeline step below
-        # instead, which runs AFTER any cross-player aggregation.
         fetch_player = None if (pipeline or multi_players or player_filter) else resolved_player
+        
         if is_category:
             result_df = run_category_query(tree, branch_id, game_dfs, player_name=fetch_player)
         else:
@@ -639,28 +539,16 @@ def execute_query_actions(
         if pipeline or multi_players or player_filter:
             pipeline = list(pipeline)
             if player_filter:
-                # Player Key override: drop any Player slice the action
-                # already had (from the router or a previous merge) and
-                # replace it outright with the coach's explicit selection
-                # -- the whole point of this path is swapping the player
-                # dimension, not combining with whatever was there before.
                 pipeline = [op for op in pipeline if not (isinstance(op, Slice) and op.axis == "Player")]
                 pipeline.append(Slice(axis="Player", keep=player_filter))
             else:
                 has_player_slice = any(isinstance(op, Slice) and op.axis == "Player" for op in pipeline)
                 if not has_player_slice:
                     if multi_players:
-                        # Narrow LAST, so whatever Compare/Rank/Reduce runs
-                        # first still sees every player it needs to.
                         pipeline.append(Slice(axis="Player", keep=multi_players))
                     elif resolved_player is not None:
                         pipeline.append(Slice(axis="Player", keep=[resolved_player]))
 
-            # Same reasoning, Metric axis: a cross-metric Slice predicate
-            # pulls in an EXTRA metric's rows alongside the one actually
-            # asked about (see prepare_pipeline_frame) -- narrow back down
-            # for single-metric actions only; a category action's whole
-            # point is showing every metric in it.
             has_metric_slice = any(isinstance(op, Slice) and op.axis == "Metric" for op in pipeline)
             primary_metric = action.get("metric_of_interest")
             if not is_category and primary_metric and not has_metric_slice:
@@ -686,7 +574,6 @@ def execute_query_actions(
 # ──────────────────────────────────────────────────────────────
 
 def tidy_data(df: pd.DataFrame, metric_label: Optional[str] = None) -> pd.DataFrame:
-    """Reshapes long observations into a wide matrix (Player, Game, Metric columns)."""
     tidy = df.copy()
     if "Metric" not in tidy.columns:
         tidy.insert(0, "Metric", metric_label)
@@ -699,7 +586,6 @@ def tidy_data(df: pd.DataFrame, metric_label: Optional[str] = None) -> pd.DataFr
 
 
 def consolidate_action_results(action_results: List[dict]) -> pd.DataFrame:
-    """Merges outputs across multiple query actions into a SINGLE consolidated wide table."""
     wide_frames = []
 
     for item in action_results:
@@ -723,14 +609,6 @@ def consolidate_action_results(action_results: List[dict]) -> pd.DataFrame:
         shared_cols = [c for c in metric_cols if c in consolidated.columns]
         new_cols = [c for c in metric_cols if c not in consolidated.columns]
 
-        # Always merge, even when there's no NEW metric column -- two
-        # actions for the SAME metric but different players (e.g. the
-        # router split "Sloan's and Kendal's kills per set" and it didn't
-        # get merged back into one action upstream) still need their ROWS
-        # combined, not just their columns. A shared column name gets a
-        # "_dup" suffix from the merge, then combine_first folds it back
-        # into the original column (first non-null wins) instead of a
-        # second copy silently overwriting or vanishing.
         merge_cols = ["Player", "Game"] + shared_cols + new_cols
         consolidated = pd.merge(
             consolidated, next_frame[merge_cols], on=["Player", "Game"],
@@ -746,7 +624,6 @@ def consolidate_action_results(action_results: List[dict]) -> pd.DataFrame:
 
 
 def get_metric_format_pattern(tree: KnowledgeTree, metric_label: str) -> str:
-    """Determines string formatting rules based on metric spec & metadata."""
     node = find_leaf_by_exact_label(tree, metric_label)
     lbl_lower = metric_label.lower()
 
@@ -772,70 +649,21 @@ def get_metric_format_pattern(tree: KnowledgeTree, metric_label: str) -> str:
     return "{:.2f}"
 
 
-def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree,
-                       selections: Optional[List[Dict[str, Optional[str]]]] = None):
-    """Applies semantic formatting, clean dash fills for missing values,
-    and brushing-and-linking: each active selection (see qa_selections)
-    tints the row(s) it names in its OWN color, and the SPECIFIC (Player,
-    Game, Metric) cell it names gets a bold, white-bordered fill in that
-    same color (the exact thing that was clicked, in the chart or
-    elsewhere) -- several independent selections can each light up their
-    own rows/cells at once, in different colors, matching the chart
-    panels below. Non-matching rows are untouched."""
-    selections = selections or []
-
+def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree):
+    """Applies semantic formatting and clean dash fills for missing values."""
     format_dict = {}
     for col in df.columns:
         if col in ["Player", "Game"]:
             continue
         format_dict[col] = get_metric_format_pattern(tree, str(col))
-
-    def _row_hit(row, sel):
-        hl_player, hl_game = sel.get("player"), sel.get("game")
-        return (
-            (hl_player is not None or hl_game is not None)
-            and (hl_player is None or row.get("Player") == hl_player)
-            and (hl_game is None or row.get("Game") == hl_game)
-        )
-
-    def _row_style(row):
-        styles = [""] * len(row.index)
-
-        # Row-level tint: the first selection that names this row wins the
-        # tint color for the whole row (several selections rarely share a
-        # player+game, but if they do, picking one consistently beats an
-        # unreadable blend).
-        for sel in selections:
-            if _row_hit(row, sel):
-                styles = [f"background-color: {sel['color']}; color: {UMD_BLACK};"] * len(row.index)
-                break
-
-        # Exact-cell override: whichever selection names THIS row AND this
-        # specific metric column gets the bold bordered treatment, in its
-        # own color -- later-listed selections win a cell both concern.
-        for i, col in enumerate(row.index):
-            for sel in selections:
-                if _row_hit(row, sel) and sel.get("metric") is not None and col == sel.get("metric"):
-                    styles[i] = (
-                        f"background-color: {sel['color']}; color: {UMD_BLACK}; "
-                        f"font-weight: bold; border: 3px solid {UMD_WHITE};"
-                    )
-        return styles
-
-    return df.style.format(format_dict, na_rep="—").apply(_row_style, axis=1)
+    return df.style.format(format_dict, na_rep="—")
 
 
 # ──────────────────────────────────────────────────────────────
-# HELPERS -- tree persistence and CSV listing/fetching now live entirely
-# in recruiting_data_store.py (the one module that talks to VolleyData);
-# imported at the top of this file.
+# HELPERS 
 # ──────────────────────────────────────────────────────────────
 
 def _safe_get_games() -> List[GameInfo]:
-    """get_games() talks to VolleyData over the network -- wrapped so a
-    transient outage or misconfigured secret shows an empty game list
-    instead of crashing the whole app (including at module-import time,
-    which is what running this script or importing it for tests does)."""
     try:
         return get_games()
     except RuntimeError:
@@ -890,103 +718,6 @@ def reset_wizard() -> None:
     st.session_state.new_metric_step = "describe"
     st.session_state.new_metric_worked_example = None
     st.session_state.pop("review_parser_note", None)
-
-
-def _consume_new_click(signature_key: str, raw_signature: tuple) -> bool:
-    """A clicked table cell or chart bar stays selected in Streamlit's own
-    widget state across every later rerun (a widget's on_select payload
-    doesn't clear itself just because something else changed) -- without
-    this, `_toggle_selection` would re-fire on that SAME already-handled
-    click every single rerun, flickering the selection on and off. Tracks
-    the last raw click payload actually processed per widget key, and only
-    returns True when this one is new."""
-    signatures = st.session_state.qa_click_signatures
-    if signatures.get(signature_key) == raw_signature:
-        return False
-    signatures[signature_key] = raw_signature
-    return True
-
-
-def _selection_key(selection: Dict[str, Optional[str]]) -> tuple:
-    return (selection.get("player"), selection.get("game"), selection.get("metric"))
-
-
-def _next_selection_color(existing: List[Dict[str, Optional[str]]]) -> str:
-    used = {sel["color"] for sel in existing}
-    for color in SELECTION_PALETTE:
-        if color not in used:
-            return color
-    return SELECTION_PALETTE[len(existing) % len(SELECTION_PALETTE)]
-
-
-def _toggle_selection(candidate: Dict[str, Optional[str]]) -> None:
-    """Adds `candidate` as a new brushing-and-linking selection (assigned
-    the next free color from SELECTION_PALETTE), or removes it if the
-    exact same player/game/metric is already selected -- lets a coach
-    light up several bars/cells at once, each in its own color, and click
-    one again to turn it back off. Reruns immediately so the SAME script
-    pass that registered the click doesn't render the table/charts against
-    a now-stale selection list (see _consume_new_click)."""
-    selections = st.session_state.qa_selections
-    key = _selection_key(candidate)
-    for idx, sel in enumerate(selections):
-        if _selection_key(sel) == key:
-            selections.pop(idx)
-            st.rerun()
-            return
-    selections.append({**candidate, "color": _next_selection_color(selections)})
-    st.rerun()
-
-
-def _selection_label(sel: Dict[str, Optional[str]]) -> str:
-    return " / ".join(v for v in (sel.get("player"), sel.get("game"), sel.get("metric")) if v) or "(selection)"
-
-
-def _linked_selections_caption(selections: List[Dict[str, Optional[str]]]) -> str:
-    """Same numbered-badge text shown in both the Selections list and next
-    to the table/charts -- the shared numbers (not just shared colors) are
-    what let a coach match a highlighted table cell to a highlighted chart
-    bar at a glance, wherever their eyes currently are on the page."""
-    parts = "; ".join(f"#{i} {_selection_label(sel)}" for i, sel in enumerate(selections, start=1))
-    return f"🔗 Linked selections: **{parts}**"
-
-
-def _seed_rank_auto_highlights(action_results: List[dict]) -> None:
-    """After a fresh set of results (a new question, or a Player Key
-    re-run of the last one), pre-select whichever row(s) a Rank operation
-    actually decided were "the top" of their group -- so the answer to
-    "who's highest" is already highlighted in the table and charts
-    instead of making the coach go click it themselves. Only fires for
-    actions whose pipeline actually ran a Rank (see execute_query_actions
-    / recruiting_operations._apply_rank, which now ranks per remaining-
-    axis group); every other action is untouched. Mutates
-    st.session_state.qa_selections in place."""
-    for item in action_results:
-        if "error" in item or item.get("status") == "missing_metric":
-            continue
-        pipeline = item.get("pipeline") or []
-        rank_ops = [op for op in pipeline if isinstance(op, Rank)]
-        if not rank_ops:
-            continue
-        df = item["result_df"]
-        axis = rank_ops[-1].axis
-        if axis not in df.columns or df.empty:
-            continue
-        group_cols = [a for a in ("Player", "Game", "Metric") if a in df.columns and a != axis]
-        top_rows = df.groupby(group_cols, dropna=False, sort=False).head(1) if group_cols else df.head(1)
-        action_metric = item["action"].get("metric_of_interest")
-        for _, row in top_rows.iterrows():
-            candidate = {
-                "player": row.get("Player") if "Player" in df.columns else None,
-                "game": row.get("Game") if "Game" in df.columns else None,
-                "metric": row.get("Metric") if "Metric" in df.columns else action_metric,
-            }
-            key = _selection_key(candidate)
-            if any(_selection_key(sel) == key for sel in st.session_state.qa_selections):
-                continue
-            st.session_state.qa_selections.append(
-                {**candidate, "color": _next_selection_color(st.session_state.qa_selections)}
-            )
 
 
 def render_dependents(dependents) -> None:
@@ -1172,10 +903,6 @@ if "tree" not in st.session_state:
         try:
             save_committed_tree(tree)
         except RuntimeError as e:
-            # Run with the freshly-seeded tree in memory either way -- a
-            # failed first-run save (VolleyData/secrets not set up yet)
-            # shouldn't block the app from loading at all, just mean this
-            # session's baseline won't be durably saved.
             _startup_save_warning = f"Couldn't save the seeded tree to VolleyData yet: {e}"
     st.session_state.tree = tree
     st.session_state.new_metric_step = "describe"
@@ -1190,21 +917,6 @@ if "tree" not in st.session_state:
     st.session_state.qa_last_decomposition = None
     st.session_state.qa_action_results = []
     st.session_state.qa_encodings = {}
-    # Brushing-and-linking selections, shared between the consolidated
-    # table and every chart panel: click a metric cell in the table, or a
-    # bar in a chart, and it's ADDED to this list as
-    # {"player","game","metric","color"} (any of player/game/metric can be
-    # None) -- clicking the exact same thing again removes it. Several can
-    # be active at once, each in its own SELECTION_PALETTE color, and both
-    # the table and every chart read this same list so they always agree.
-    st.session_state.qa_selections = []
-    # Last raw click payload actually turned into a selection, per widget
-    # key -- see _consume_new_click's docstring for why this is needed.
-    st.session_state.qa_click_signatures = {}
-    # Player Key toggle state: which players the coach has explicitly
-    # selected to re-run the last question against (see execute_query_
-    # actions' player_filter param). Empty means "no override -- use
-    # whatever player(s) each action itself named."
     st.session_state.qa_player_filter = []
     st.session_state.expanded_branches = set()
     st.session_state.last_graph_click = None
@@ -1298,22 +1010,10 @@ with tab_qa:
 
             st.session_state.qa_last_decomposition = decomposition
             st.session_state.qa_action_results = action_results
-            # Fresh question -> fresh chart encodings. Keyed by action
-            # index below; without this reset, a NEW question's action 0
-            # would silently inherit whatever manual position/color/facet
-            # override was left over from the PREVIOUS question's action 0.
             st.session_state.qa_encodings = {}
-            # Same reasoning for brushing -- stale selections from the last
-            # question shouldn't light up a coincidentally-matching
-            # player/game/metric in a brand new result set.
-            st.session_state.qa_selections = []
-            # Same for the Player Key filter -- a checked-off player from
-            # the PREVIOUS question's toggles shouldn't silently narrow a
-            # brand new, unrelated question.
             st.session_state.qa_player_filter = []
             for _player in known_player_pool:
                 st.session_state.pop(f"qa_playerfilter_{_player}", None)
-            _seed_rank_auto_highlights(action_results)
 
     decomposition = st.session_state.qa_last_decomposition
     action_results = st.session_state.qa_action_results
@@ -1323,14 +1023,6 @@ with tab_qa:
         if decomposition.get("limitations"):
             st.warning(decomposition["limitations"])
 
-        # Player Key toggle re-run: the checkboxes themselves are drawn
-        # later, in the chart panel's sidebar, but Streamlit already has
-        # their post-click state in session_state by the time THIS script
-        # pass runs -- reading it here, before the table/charts below are
-        # built, means a toggle takes effect in the SAME rerun instead of
-        # needing an extra one. No LLM call: this just re-executes the
-        # cached decomposition with the new player set standing in for
-        # whatever each action itself named (see execute_query_actions).
         current_player_filter = sorted(
             p for p in known_player_pool if st.session_state.get(f"qa_playerfilter_{p}", False)
         )
@@ -1343,8 +1035,6 @@ with tab_qa:
             )
             st.session_state.qa_action_results = action_results
             st.session_state.qa_encodings = {}
-            st.session_state.qa_selections = []
-            _seed_rank_auto_highlights(action_results)
 
         valid_action_results = [item for item in action_results if "error" not in item and item.get("status") != "missing_metric"]
         missing_metric_actions = [item for item in action_results if item.get("status") == "missing_metric"]
@@ -1355,38 +1045,8 @@ with tab_qa:
         consolidated_df = consolidate_action_results(valid_action_results)
 
         if not consolidated_df.empty:
-            # Brushing: a metric CELL clicked here toggles it into/out of
-            # qa_selections, which both this table's own styling AND every
-            # chart panel below read from -- click a bar in a chart
-            # instead and the SAME shared list updates the other way (see
-            # the chart loop). Reads the PREVIOUS run's selection
-            # (Streamlit populates the widget's session_state key before
-            # the script body runs again), so a click this table just
-            # registered is already reflected by the time execution
-            # reaches here.
-            table_click_state = st.session_state.get("qa_table_select")
-            if table_click_state:
-                cells = (table_click_state.get("selection") or {}).get("cells") or []
-                if cells:
-                    row_idx, col_name = cells[0]
-                    if (col_name not in ("Player", "Game") and row_idx < len(consolidated_df)
-                            and _consume_new_click("qa_table_select", (row_idx, col_name))):
-                        clicked_row = consolidated_df.iloc[row_idx]
-                        _toggle_selection({
-                            "player": clicked_row.get("Player"),
-                            "game": clicked_row.get("Game"),
-                            "metric": col_name,
-                        })
-
-            selections = st.session_state.qa_selections
-            formatted_table = format_tidy_table(consolidated_df, tree, selections=selections)
-            st.dataframe(
-                formatted_table, use_container_width=True, hide_index=True,
-                on_select="rerun", selection_mode=["single-cell"], key="qa_table_select",
-            )
-
-            if selections:
-                st.caption(_linked_selections_caption(selections))
+            formatted_table = format_tidy_table(consolidated_df, tree)
+            st.dataframe(formatted_table, use_container_width=True, hide_index=True)
 
             with st.expander("💡 Table Provenance & Metric Contracts"):
                 st.markdown("This view consolidates data computed from the **Committed Knowledge Base**: ")
@@ -1402,11 +1062,6 @@ with tab_qa:
         elif not missing_metric_actions:
             unrecognized = decomposition.get("unrecognized_terms") or []
             if unrecognized:
-                # Entirely-unrecognized case ("sloan's yendas per game"): no
-                # valid result, no plausible-but-uncommitted metric either --
-                # an honest rejection per term, never an AI-drafted formula,
-                # since there's nothing here that even LOOKED like a real
-                # metric name to draft one for.
                 terms = ", ".join(f"'{t}'" for t in unrecognized)
                 st.error(f"I didn't recognize {terms} as a stat or metric -- did you mean something else?")
             else:
@@ -1420,20 +1075,12 @@ with tab_qa:
             st.divider()
 
             if item["is_gibberish"]:
-                # Task 1.3: the router itself flagged this exact term as
-                # unrecognized (see is_gibberish's computation above) --
-                # show an honest rejection, and do NOT call the metric
-                # author here at all. Drafting a formula for a term the
-                # router already said it didn't understand would be
-                # exactly the hallucinated typo-correction the system
-                # prompt's grounding rules exist to forbid.
                 st.error(f"I didn't recognize **'{missing_label}'** as a stat or metric -- did you mean something else?")
                 st.caption("This didn't look like a plausible volleyball stat, so no formula was drafted for it.")
                 continue
 
             st.warning(f"⚠️ **Missing Metric Detected:** The metric **'{missing_label}'** is not in your Knowledge Base.")
 
-            # Use LLM to draft a candidate proposal for this missing metric
             try:
                 draft_proposal = parse_phrase_to_formula_llm(missing_label, tree)
             except LLMUnavailableError:
@@ -1478,34 +1125,10 @@ with tab_qa:
                     st.error(f"Could not automatically draft a formula: {draft_proposal.message}")
                     st.caption("You can manually define this metric in the Knowledge Base tab.")
 
-        # ── 3. VISUALIZATION CHARTS -- one adaptive chart per action, encoded
-        # by which of Player/Game/Metric still vary in THAT action's own
-        # result (see recruiting_encoding.py). Encodings are cached in
-        # st.session_state.qa_encodings, keyed by action index, and reset
-        # to a fresh default whenever a NEW question is asked (see the
-        # qa_encodings = {} reset alongside qa_action_results above) --
-        # so switching questions never carries over a stale override, but
-        # tweaking the dropdowns below persists across reruns of the SAME
-        # question. Clicking a bar toggles it into/out of the matching
-        # table cell's selection (and vice versa) via the shared
-        # qa_selections list -- see _toggle_selection and the table
-        # section above. Several bars/cells can be selected at once, each
-        # in its own color, listed in the "Selections" key alongside the
-        # existing per-player "Player Key".
+        # ── 3. VISUALIZATION CHARTS ──
         if valid_action_results:
             with st.expander("📈 Interactive Visualizations", expanded=True):
                 qa_encodings = st.session_state.qa_encodings
-                selections = st.session_state.qa_selections
-                # Each highlight carries its own "#N" badge (matching the
-                # Selections list and the table caption below) alongside
-                # its color -- see recruiting_encoding._apply_highlights:
-                # the badge is what makes a highlighted bar and a
-                # highlighted table cell read as "the same thing" rather
-                # than asking the viewer to match two colors by eye.
-                highlights = [
-                    (f"#{idx}", sel["color"], {"player": sel.get("player"), "game": sel.get("game"), "metric": sel.get("metric")})
-                    for idx, sel in enumerate(selections, start=1)
-                ]
                 player_color_map = get_player_color_map(known_player_pool)
 
                 col_charts, col_key = st.columns([5, 1])
@@ -1539,41 +1162,12 @@ with tab_qa:
                                 unsafe_allow_html=True,
                             )
 
-                    st.markdown("**Selections**")
-                    if not selections:
-                        st.caption("Click a table cell or a bar to select it.")
-                    for sel_idx, sel in enumerate(selections):
-                        badge = f"#{sel_idx + 1}"
-                        col_swatch, col_remove = st.columns([4, 1])
-                        col_swatch.markdown(
-                            f'<div style="display:flex;align-items:center;margin-bottom:4px;">'
-                            f'<span style="display:inline-block;width:14px;height:14px;'
-                            f'background-color:{sel["color"]};border:1px solid {UMD_WHITE};margin-right:6px;">'
-                            f'</span><span style="font-size:0.8em;color:{UMD_WHITE};"><strong>{badge}</strong> {_selection_label(sel)}</span></div>',
-                            unsafe_allow_html=True,
-                        )
-                        if col_remove.button("✕", key=f"qa_sel_remove_{sel_idx}"):
-                            st.session_state.qa_selections.pop(sel_idx)
-                            st.rerun()
-                    if selections and st.button("Clear all selections", key="qa_sel_clear_all"):
-                        st.session_state.qa_selections = []
-                        st.rerun()
-
                 with col_charts:
-                    if selections:
-                        st.caption(_linked_selections_caption(selections) + "  (same numbers as the table above)")
                     for i, item in enumerate(valid_action_results):
                         action = item["action"]
                         title = action.get("title") or action.get("metric_of_interest") or action.get("skill_group") or f"Chart {i + 1}"
                         result_df = item["result_df"]
 
-                        # Routing-inspection moment for the pipeline itself (same
-                        # spirit as the "LLM Router Decomposition" expander below):
-                        # show what was actually computed before the coach trusts
-                        # the number, and surface any note from fetching/running
-                        # it (e.g. an unresolvable cross-metric predicate, or a
-                        # pipeline step that emptied the result) even when that
-                        # means the chart itself gets skipped just after this.
                         if item.get("pipeline"):
                             st.caption(f"🔧 Pipeline: {describe_pipeline(item['pipeline'])}")
                         for note in item.get("pipeline_notes", []):
@@ -1628,55 +1222,23 @@ with tab_qa:
 
                         panels = render_encoded_panels(
                             result_df, encoding, value_col="Value",
-                            color_map=player_color_map, highlights=highlights,
+                            color_map=player_color_map
                         )
                         if not panels:
                             st.info("No computable values for this chart.")
                             continue
 
-                        # 2 panels per row, wrapping to a new row underneath
-                        # rather than squeezing every panel into one row --
-                        # a facet with several values stays readable instead
-                        # of each panel shrinking as more get added. A single
-                        # panel is just a "row" of 1.
                         panels_per_row = 2 if len(panels) > 1 else 1
                         for row_start in range(0, len(panels), panels_per_row):
                             row_panels = panels[row_start:row_start + panels_per_row]
                             row_cols = st.columns(panels_per_row)
                             for col, (panel_title, fig) in zip(row_cols, row_panels):
                                 panel_key = f"qa_chart_{i}" if len(panels) == 1 else f"qa_chart_{i}_{panel_title}"
-                                # panel_metric: the facet value IS the metric
-                                # when faceted by Metric; otherwise this whole
-                                # panel already is the action's one metric.
-                                panel_metric = panel_title if encoding.facet == "Metric" else action_metric
-
-                                # Brushing, other direction: a bar clicked in a
-                                # PRIOR run is reflected in this key's session
-                                # state before this run's widget call even
-                                # happens (same "read before re-creating the
-                                # widget" idiom as the table's click handling
-                                # above) -- resolve it against THIS run's figure
-                                # (same data/encoding, so the trace layout
-                                # matches) and toggle it into/out of the
-                                # shared selection list.
-                                prior_click = st.session_state.get(panel_key)
-                                if prior_click:
-                                    points = (prior_click.get("selection") or {}).get("points") or []
-                                    if points:
-                                        point = points[0]
-                                        click_sig = (point.get("curve_number"), point.get("x"), point.get("y"))
-                                        if _consume_new_click(panel_key, click_sig):
-                                            clicked = resolve_clicked_point(points, encoding, fig, panel_metric)
-                                            if clicked:
-                                                _toggle_selection(clicked)
-
                                 panel_title_display = title if len(panels) == 1 else f"{title} — {panel_title}"
                                 fig.update_layout(**PLOTLY_BASE, title=panel_title_display, showlegend=False)
+                                
                                 with col:
-                                    st.plotly_chart(
-                                        fig, use_container_width=True, key=panel_key,
-                                        on_select="rerun", selection_mode=["points"],
-                                    )
+                                    st.plotly_chart(fig, use_container_width=True, key=panel_key)
 
         # ── 4. ROUTING DETAILS ──
         with st.expander("⚙️ LLM Router Decomposition"):
@@ -1904,11 +1466,6 @@ with tab_kb:
         if st.button("Merge All Staged Changes", type="primary", disabled=len(diff) == 0):
             n_changes = len(diff)
             tree.merge()
-            # save_committed_tree is the ONLY durable persistence step now --
-            # it pushes straight to the private VolleyData repo, no local
-            # file involved. It's already merged into the in-memory tree
-            # for this session even if the push below fails, so a failure
-            # here is "not durably saved yet," not "lost."
             flash_level, flash_text = "success", f"Merged {n_changes} change(s) into committed tree."
             try:
                 save_committed_tree(tree)

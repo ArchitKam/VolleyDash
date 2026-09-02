@@ -60,36 +60,6 @@ def call_llm(system_prompt: str, user_message: str, max_tokens: int = 2048,
     (models routinely wrap JSON in ```json ... ``` even when asked not
     to). Parsing that text into JSON is left to each caller, since the
     two features want slightly different schemas.
-
-    Tries LLM_MODEL first, falling back to each of LLM_FALLBACK_MODELS in
-    order ONLY on RateLimitError/NotFoundError (this specific model is
-    rate-limited or unavailable -- a different model has its own,
-    separate quota and may well still work). Any other APIError
-    (connection/timeout, auth, a transient 5xx) fails immediately without
-    trying the fallbacks, since those affect Groq/the account as a whole,
-    not just one model -- retrying a different model wouldn't help.
-
-    Both LLM_MODEL and every entry in LLM_FALLBACK_MODELS are "gpt-oss"
-    reasoning models: by default they spend a chunk of max_tokens on a
-    hidden chain-of-thought BEFORE writing the actual JSON answer, and
-    that hidden reasoning counts against the same token budget as the
-    visible response -- confirmed truncation mid-response (e.g. a
-    multi-action router query cut off mid-string) was traced to exactly
-    this, not to max_tokens being too low for the JSON itself. Neither
-    feature here needs step-by-step reasoning (routing and formula
-    authoring are both "map this phrase onto one of a fixed set of known
-    options"), so reasoning_effort="low" plus include_reasoning=False
-    (Groq-specific, passed via extra_body since it isn't a typed OpenAI
-    param) keep nearly the whole budget available for the answer itself.
-
-    Raises LLMUnavailableError on a missing API key, or once every model
-    in the chain has been tried and failed. Callers already treat
-    LLMUnavailableError uniformly (fall back to the rule-based parser, or
-    show a clear "unreachable" message) -- a Groq-side hiccup should
-    degrade the SAME way regardless of which specific failure caused it,
-    not crash the app with an uncaught SDK exception. Only a genuinely
-    unexpected failure (e.g. a malformed response object once a call
-    actually succeeded) propagates as-is.
     """
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
@@ -141,17 +111,7 @@ def call_llm(system_prompt: str, user_message: str, max_tokens: int = 2048,
 
 
 # ──────────────────────────────────────────────────────────────
-# RULE-BASED FALLBACK PARSER -- used when the LLM is unreachable.
-# Matching strategy: AND-of-OR keyword groups over a normalized phrase,
-# NOT plain substring matching. Substring matching overmatches -- e.g. a
-# bare "kills" substring check would also fire on "how many kills did
-# she have, nothing about errors or rate", silently producing a
-# plausible-looking but wrong formula. Requiring every keyword GROUP in
-# a rule to have at least one hit makes accidental cross-rule matches
-# much less likely, while still being entirely hardcoded/rule-based (no
-# ML, no fuzzy scoring). Every rule's formula is hand-verified against
-# RECRUITING_COLUMN_SCHEMA at authoring time, so a matched rule can
-# never reference a nonexistent column.
+# RULE-BASED FALLBACK PARSER
 # ──────────────────────────────────────────────────────────────
 
 from dataclasses import dataclass, field
@@ -170,25 +130,21 @@ def _normalize(phrase: str) -> str:
 @dataclass
 class ParseResult:
     matched: bool
-    spec_kind: Optional[str] = None          # "formula" or "column"
+    spec_kind: Optional[str] = None          
     formula_expr: Optional[str] = None
     column_ref: Optional[str] = None
     human_description: Optional[str] = None
     suggested_label: Optional[str] = None
-    suggested_branch_group: Optional[str] = None   # one of ALL_SKILL_GROUPS
+    suggested_branch_group: Optional[str] = None   
     matched_rule_name: Optional[str] = None
-    message: Optional[str] = None            # shown to the user either way
-    # Populated by the LLM-backed author (parse_phrase_to_formula_llm) so
-    # a freshly-staged metric is actually findable by the Q&A router's
-    # alias-substring retrieval later; the rule-based rules below don't set
-    # this (defaults to []) since their 6 phrasings are already the aliases.
+    message: Optional[str] = None            
     suggested_aliases: List[str] = field(default_factory=list)
 
 
 @dataclass
 class _Rule:
     name: str
-    required_keyword_groups: List[Set[str]]   # AND across groups, OR within a group
+    required_keyword_groups: List[Set[str]]   
     example_phrase: str
     build: Callable[[], ParseResult] = field(repr=False)
 
@@ -257,16 +213,6 @@ def _rule_dig_efficiency() -> ParseResult:
     )
 
 
-# Order matters: first full match wins. More specific rules (e.g. "per set"
-# rate variants) are listed before their plainer counterparts so a phrase
-# like "net kills per set" doesn't get short-circuited by a broader rule.
-#
-# Deliberately NOT included: a "passing minus errors" rule. The schema has
-# no single "passing count" column (only quality buckets Receive 3/2/1/0
-# and the already-a-ratio Receive Pass%), so there's no unit-consistent
-# literal mapping available -- rather than guess at a mismatched formula,
-# a phrase like "her passing minus her errors" is left to fall through to
-# the no-match path below, same as any other unrecognized phrase.
 _RULES: List[_Rule] = [
     _Rule("net_kills_per_set",
           [{"net"}, {"kill", "kills"}, {"per set", "per-set", "rate"}],
@@ -292,12 +238,6 @@ EXAMPLE_PHRASES: List[str] = [r.example_phrase for r in _RULES]
 
 
 def parse_phrase_to_formula(phrase: str) -> ParseResult:
-    """
-    Matches a plain-language phrase against a small fixed set of hardcoded
-    rules. First full match wins. No match -> ParseResult(matched=False,
-    message=...) -- callers MUST show EXAMPLE_PHRASES as guidance in that
-    case rather than guessing or partially applying a rule.
-    """
     if not phrase or not phrase.strip():
         return ParseResult(matched=False, message="Type a description first.")
 
@@ -318,12 +258,7 @@ def parse_phrase_to_formula(phrase: str) -> ParseResult:
 
 
 # ──────────────────────────────────────────────────────────────
-# LLM-BACKED METRIC AUTHOR -- replaces parse_phrase_to_formula above with
-# a real LLM call, same ParseResult contract so app.py's wizard barely
-# has to change between the two. Not a trusted source of truth: the
-# LLM's proposed expression still runs through app.py's
-# build_spec_from_expr()/MetricSpec.validate() path exactly like a
-# rule-based or hand-typed formula would.
+# LLM-BACKED METRIC AUTHOR 
 # ──────────────────────────────────────────────────────────────
 
 _SINGLE_COL_RE = re.compile(r"^\[([^\[\]]+)\]$")
@@ -382,7 +317,7 @@ def parse_phrase_to_formula_llm(phrase: str, tree: KnowledgeTree) -> ParseResult
     if not phrase or not phrase.strip():
         return ParseResult(matched=False, message="Type a description first.")
 
-    raw = call_llm(_build_metric_author_system_prompt(tree), phrase)  # raises LLMUnavailableError on connection failure
+    raw = call_llm(_build_metric_author_system_prompt(tree), phrase) 
 
     try:
         data = json.loads(raw)
@@ -417,27 +352,11 @@ def parse_phrase_to_formula_llm(phrase: str, tree: KnowledgeTree) -> ParseResult
 
 
 # ──────────────────────────────────────────────────────────────
-# LLM-BACKED QUERY ROUTER -- query-decomposition for the "Ask a
-# Question" tab. Two-stage shape: (1) cheap non-embedding alias
-# retrieval narrows what the prompt shows, (2) one LLM call produces
-# JSON, (3) deterministic Python-side repair. Supports full multi-action
-# decomposition: one question can name several (metric, player, game)
-# triples at once, each becoming its own action.
-#
-# Nothing here resolves a player or game to a real record -- player/
-# game_hint come back as whatever raw text the LLM extracted.
-# Resolution against the real roster/game files happens downstream in
-# app.py (resolve_player_name / resolve_game_hint) -- "the LLM
-# extracts, Python resolves".
+# LLM-BACKED QUERY ROUTER
 # ──────────────────────────────────────────────────────────────
 
 _TOP_K_CANDIDATES = 8
 
-# Small hardcoded synonym list per skill-group branch, same "cheap, hand-
-# verified, no ML" philosophy as the rule-based parser above -- lets
-# "serving"/"passing" resolve to the real branch labels ("Serve"/
-# "Receive") even though those words never appear as a branch label
-# substring themselves.
 _SKILL_GROUP_SYNONYMS: Dict[str, List[str]] = {
     "Attack": ["attack", "attacking", "hitting", "hit"],
     "Serve": ["serve", "serving", "serves"],
@@ -451,11 +370,6 @@ _SKILL_GROUP_SYNONYMS: Dict[str, List[str]] = {
 
 
 def _resolve_skill_group(hint: Optional[str], valid_branches: List[str]) -> Optional[str]:
-    """Tiered match of a raw category guess (e.g. 'serving') against the
-    tree's REAL current branch labels: exact (case-insensitive) -> hardcoded
-    synonym list -> substring -> difflib ratio >= 0.75. Returns None rather
-    than guessing on ambiguity, same as resolve_game_hint/resolve_player_name
-    (recruiting_executor logic, merged into app.py)."""
     if not hint or not hint.strip():
         return None
     needle = hint.strip().lower()
@@ -477,17 +391,6 @@ def _resolve_skill_group(hint: Optional[str], valid_branches: List[str]) -> Opti
 
 
 def _retrieve_candidate_metrics(query: str, tree: KnowledgeTree) -> Dict[str, Any]:
-    """
-    Stage 1 -- pure Python, no LLM. For every committed LEAF, treats its
-    own label as an implicit alias on top of its real `aliases` list (so a
-    metric with no aliases yet can still be found via its label words),
-    substring-matches each against the lowercased query, and ranks by
-    number of hits.
-
-    Falls back to EVERY committed leaf label if nothing matches at all
-    (fallback=True) -- preserve recall for unanticipated phrasing rather
-    than showing the model an empty candidate list.
-    """
     q = query.lower()
     all_leaves = {n.label: [n.label.lower()] + [a.lower() for a in n.aliases]
                   for n in tree.committed.values() if n.kind == NodeKind.LEAF}
@@ -533,7 +436,6 @@ Each action is EITHER about one specific metric OR about a whole skill category:
 - Never set both metric_of_interest and skill_group non-null in the same action.
 - IMPORTANT ORDER OF OPERATIONS: Check if the coach's ask matches a Category FIRST. If it matches a Category (e.g., "passing" -> "Receive"), set "skill_group" and leave "metric_of_interest" null. 
 - ONLY if the ask does NOT match a Category, AND it sounds like a plausible specific stat that isn't in the metrics list, should you set "metric_of_interest" to your best paraphrase to let the coach author it later.
-- If the coach describes a stat that sounds plausible but isn't in the metric list below, still set "metric_of_interest" to your best paraphrase of what they asked for (e.g. "Net Kills Per Set") -- this lets the coach author it on the spot. 
 
 Metrics (use for metric_of_interest):
 {metrics_block}
@@ -578,13 +480,6 @@ Respond with ONLY this JSON shape, no other text:
 """
 
 def _repair_pipeline(raw_pipeline: Any, notes: List[str], action_label: str) -> List[Any]:
-    """Deterministic repair for one action's pipeline: absent/not-a-list ->
-    empty (no-op, backwards compatible with every pre-pipeline query);
-    present but containing an invalid op/axis/agg/comparison -> the WHOLE
-    pipeline is dropped for that action (not partially applied), same
-    all-or-nothing mechanical validation as a MetricSpec's own formula --
-    a half-trusted pipeline could silently compute something other than
-    what was asked."""
     if not raw_pipeline:
         return []
     if not isinstance(raw_pipeline, list):
@@ -604,13 +499,6 @@ def _repair_unrecognized_terms(raw_terms: Any) -> List[str]:
 
 
 def _action_shape_key(action: Dict[str, Any]) -> tuple:
-    """Everything about an action EXCEPT player/title -- two actions with
-    the same key are "the same ask, different player" candidates for
-    merge_same_shape_actions. Pipeline is compared by VALUE (via
-    pipeline_to_dicts + a sorted-keys JSON dump), not by identity/hash --
-    Slice carries a `keep: List[str]` field, which makes the Operation
-    dataclasses unhashable, so they can't be used as/in a dict key
-    directly."""
     return (
         action.get("metric_of_interest"),
         action.get("skill_group"),
@@ -621,31 +509,6 @@ def _action_shape_key(action: Dict[str, Any]) -> tuple:
 
 
 def merge_same_shape_actions(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Runs after per-action repair, before anything executes. The router is
-    explicitly instructed (see _build_router_system_prompt) to split a
-    same-metric-different-player question into one action per player --
-    intentional, left alone here. This undoes the visible EFFECT of that
-    split after the fact (one action, multiple players) rather than
-    relying on the model not doing it in the first place.
-
-    Groups actions by everything EXCEPT player/title (see
-    _action_shape_key). Within a group, if 2+ actions each have a
-    distinct, non-null, single (string) player -- and none already has a
-    null or multi-value player -- merges them into ONE action: player
-    becomes the list of those raw hints (still unresolved text; resolving
-    a hint against the real roster needs known_player_pool, which only
-    app.py has -- see its execution loop for where that list gets
-    resolved and turned into a Slice(axis="Player", keep=[...]) pipeline
-    step), title is regenerated, everything else copied from the first
-    action in the group.
-
-    An action with no same-shaped sibling, or one that differs in metric/
-    skill_group/game_hint/pipeline, is left completely alone -- a false
-    merge (combining two actions that aren't really "the same ask,
-    different player") would be worse than the one-chart-per-player bug
-    this exists to fix.
-    """
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
     order: List[tuple] = []
     for action in actions:
@@ -679,9 +542,6 @@ def merge_same_shape_actions(actions: List[Dict[str, Any]]) -> List[Dict[str, An
 
 
 def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[str, Any]:
-    """Stage 2 -- deterministic repair. Preserves raw metric names even if they
-    are not yet committed in the tree, allowing downstream UIs to trigger
-    in-situ knowledge acquisition."""
     valid_metrics = {n.label for n in tree.committed.values() if n.kind == NodeKind.LEAF}
     valid_branches = [n.label for n in tree.committed.values()
                        if n.kind == NodeKind.BRANCH and n.node_id != tree.root_id]
@@ -696,13 +556,24 @@ def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[st
         raw_metric = action.get("metric_of_interest")
         metric = raw_metric if isinstance(raw_metric, str) and raw_metric.strip() else None
 
+        raw_group = action.get("skill_group")
         skill_group = None
-        if metric is None:
-            raw_group = action.get("skill_group")
-            if isinstance(raw_group, str) and raw_group.strip():
-                skill_group = _resolve_skill_group(raw_group, valid_branches)
-                if skill_group is None:
-                    notes.append(f"Couldn't identify skill category {raw_group!r}.")
+        if isinstance(raw_group, str) and raw_group.strip():
+            skill_group = _resolve_skill_group(raw_group, valid_branches)
+
+        # 1. Catch if the LLM accidentally put a category name straight into the metric field
+        if metric and not skill_group and metric not in valid_metrics:
+            fallback_group = _resolve_skill_group(metric, valid_branches)
+            if fallback_group:
+                skill_group = fallback_group
+                metric = None
+
+        # 2. Conflict resolution: if the LLM returned BOTH fields
+        if metric and skill_group:
+            if metric in valid_metrics:
+                skill_group = None  # An explicitly known metric wins
+            else:
+                metric = None       # A hallucinated metric yields to a valid category
 
         if metric is None and skill_group is None:
             notes.append("Dropped an action with no metric or category specified.")
@@ -747,22 +618,6 @@ _RETRY_SUFFIX = (
 
 
 def decompose_recruiting_query(query: str, tree: KnowledgeTree, known_games: List[str]) -> Dict[str, Any]:
-    """
-    Full pipeline: retrieve candidate metrics -> build a prompt scoped to
-    them -> call the LLM -> parse -> mechanically repair -> attach
-    retrieved_evidence -> flag (not reject) any retrieval/generation
-    mismatch. Raises LLMUnavailableError (propagated straight through
-    call_llm) if Groq can't be reached -- callers must catch that
-    specifically and show a clear error rather than attempting to
-    interpret a result that doesn't exist.
-
-    On malformed/truncated JSON (e.g. the model enters a repetition loop
-    and gets cut off at max_tokens before the object closes), retries
-    ONCE with a stricter follow-up instruction before falling back to the
-    error path -- a truncated response is often just a one-off generation
-    hiccup, and a single retry recovers a real answer far more often than
-    giving up immediately does.
-    """
     retrieval = _retrieve_candidate_metrics(query, tree)
     system_prompt = _build_router_system_prompt(retrieval["candidates"], tree, known_games)
 
@@ -802,9 +657,6 @@ def decompose_recruiting_query(query: str, tree: KnowledgeTree, known_games: Lis
     }
 
     if not retrieval["fallback"]:
-        # Category actions (skill_group set, metric_of_interest None) aren't
-        # part of metric retrieval at all -- only single-metric actions can
-        # meaningfully mismatch against the retrieved metric candidates.
         mismatches = sorted({
             a["metric_of_interest"] for a in result.get("actions", [])
             if a.get("metric_of_interest") and a["metric_of_interest"] not in retrieval["candidates"]
