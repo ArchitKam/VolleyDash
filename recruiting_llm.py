@@ -531,7 +531,9 @@ Each action is EITHER about one specific metric OR about a whole skill category:
 - If the coach names one specific stat, set "metric_of_interest" to exactly one of the metric names below (verbatim, never invented or paraphrased) and leave "skill_group" null.
 - If the coach asks about a whole skill category in general WITHOUT naming one specific stat (e.g. "how was Sloan's serving", "how did she do on defense"), set "metric_of_interest" to null and "skill_group" to exactly one of the category names below (verbatim) -- every metric in that category will be returned together.
 - Never set both metric_of_interest and skill_group non-null in the same action.
-- If the coach describes a stat that sounds plausible but isn't in the metric list below, still set "metric_of_interest" to your best paraphrase of what they asked for (e.g. "Net Kills Per Set") -- this lets the coach author it on the spot. Do NOT do this for a word/term that has no plausible volleyball-stat meaning at all (gibberish, a typo with no obvious correction, unrelated slang) -- for THOSE, leave metric_of_interest null and list the term in "unrecognized_terms" instead (see below). The difference matters: one path offers to draft a new metric, the other is an honest "I don't understand this" -- never blur them by guessing a typo correction.
+- IMPORTANT ORDER OF OPERATIONS: Check if the coach's ask matches a Category FIRST. If it matches a Category (e.g., "passing" -> "Receive"), set "skill_group" and leave "metric_of_interest" null. 
+- ONLY if the ask does NOT match a Category, AND it sounds like a plausible specific stat that isn't in the metrics list, should you set "metric_of_interest" to your best paraphrase to let the coach author it later.
+- If the coach describes a stat that sounds plausible but isn't in the metric list below, still set "metric_of_interest" to your best paraphrase of what they asked for (e.g. "Net Kills Per Set") -- this lets the coach author it on the spot. 
 
 Metrics (use for metric_of_interest):
 {metrics_block}
