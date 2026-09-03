@@ -1,0 +1,103 @@
+"""
+fake_source.py
+===============
+A hand-built EVENT-grain Source for tests, so the spec/evaluator/query
+suites run with no .dvw file present and with data small enough that
+every expected number can be worked out by hand in the test itself.
+
+Deliberately mirrors DvwSource's shape (same identity columns, same
+skill/evaluation vocabulary structure, same sets-played measure) rather
+than being a loose stub -- a fake that does not match the real adapter's
+contract would let a broken evaluator pass.
+"""
+
+from typing import Dict, List, Optional
+
+import pandas as pd
+
+from volley_source import FieldRole, FieldSpec, Grain, Source, SourceSchema
+
+PLAYER_COLUMN = "player_label"
+GAME_COLUMN = "match_label"
+
+
+class FakeEventSource(Source):
+    """
+    Build from a list of (player, game, skill, evaluation_code) tuples
+    plus a {(player, game): sets_played} mapping.
+    """
+
+    def __init__(self, rows: List[tuple], sets_played: Optional[Dict[tuple, int]] = None):
+        self._frame = pd.DataFrame(
+            rows, columns=[PLAYER_COLUMN, GAME_COLUMN, "skill", "evaluation_code"]
+        )
+        self._sets_played = sets_played or {}
+
+    @property
+    def grain(self) -> Grain:
+        return Grain.EVENT
+
+    def identity_fields(self) -> Dict[str, str]:
+        return {"Player": PLAYER_COLUMN, "Game": GAME_COLUMN}
+
+    def facts(self) -> pd.DataFrame:
+        return self._frame
+
+    def measures(self) -> pd.DataFrame:
+        if not self._sets_played:
+            return pd.DataFrame()
+        return pd.DataFrame(
+            [{PLAYER_COLUMN: player, GAME_COLUMN: game, "sets_played": value}
+             for (player, game), value in self._sets_played.items()]
+        )
+
+    def matches(self):
+        return sorted(self._frame[GAME_COLUMN].unique())
+
+    @property
+    def schema(self) -> SourceSchema:
+        frame = self._frame
+        fields = {
+            PLAYER_COLUMN: FieldSpec(PLAYER_COLUMN, FieldRole.IDENTITY, "Player"),
+            GAME_COLUMN: FieldSpec(GAME_COLUMN, FieldRole.IDENTITY, "Match"),
+        }
+        for column in ("skill", "evaluation_code"):
+            values = frozenset(str(v) for v in frame[column].dropna().unique())
+            fields[column] = FieldSpec(column, FieldRole.DIMENSION, column, values=values)
+
+        vocabulary = {
+            str(skill): frozenset(str(c) for c in group["evaluation_code"].dropna().unique())
+            for skill, group in frame.dropna(subset=["skill"]).groupby("skill")
+        }
+        return SourceSchema(fields=fields,
+                             dependent_values={("skill", "evaluation_code"): vocabulary})
+
+
+def sample_source() -> FakeEventSource:
+    """
+    Two players, two matches, hand-countable.
+
+    Sloan  @ Game A: 3 Attack # (kills), 1 Attack = (error), 1 Attack + -> 5 attacks
+    Sloan  @ Game B: 1 Attack #, 1 Attack =                              -> 2 attacks
+    Kendal @ Game A: 2 Attack #, 2 Serve # (aces)                        -> 2 attacks
+    Kendal @ Game B: no attacks at all (only a reception)
+    """
+    rows = [
+        ("Sloan", "Game A", "Attack", "#"),
+        ("Sloan", "Game A", "Attack", "#"),
+        ("Sloan", "Game A", "Attack", "#"),
+        ("Sloan", "Game A", "Attack", "="),
+        ("Sloan", "Game A", "Attack", "+"),
+        ("Sloan", "Game B", "Attack", "#"),
+        ("Sloan", "Game B", "Attack", "="),
+        ("Kendal", "Game A", "Attack", "#"),
+        ("Kendal", "Game A", "Attack", "#"),
+        ("Kendal", "Game A", "Serve", "#"),
+        ("Kendal", "Game A", "Serve", "#"),
+        ("Kendal", "Game B", "Reception", "#"),
+    ]
+    sets_played = {
+        ("Sloan", "Game A"): 3, ("Sloan", "Game B"): 2,
+        ("Kendal", "Game A"): 3, ("Kendal", "Game B"): 4,
+    }
+    return FakeEventSource(rows, sets_played)
