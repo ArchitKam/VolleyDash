@@ -390,6 +390,26 @@ def _resolve_skill_group(hint: Optional[str], valid_branches: List[str]) -> Opti
     return fuzzy[0] if fuzzy else None
 
 
+def _looks_like_bare_category_name(text: str, valid_branches: List[str]) -> Optional[str]:
+    """Stricter than _resolve_skill_group's full tiered match (which also
+    accepts a substring or a fuzzy ratio) -- used ONLY to catch the LLM
+    putting a bare category name straight into metric_of_interest (e.g.
+    "Serve" or "serving" where skill_group should have been set instead).
+    A full metric NAME like "Serve Aces Per Set" almost always contains
+    its own skill word as a substring, so reusing the loose substring/
+    fuzzy tiers here would misfire on nearly every legitimate new-metric
+    proposal -- only an exact match or a known synonym counts as "this
+    text IS a category name," not "this text mentions one."""
+    if not text or not text.strip():
+        return None
+    needle = text.strip().lower()
+    exact = [b for b in valid_branches if b.lower() == needle]
+    if exact:
+        return exact[0]
+    synonym_hits = [b for b in valid_branches if needle in _SKILL_GROUP_SYNONYMS.get(b, [])]
+    return synonym_hits[0] if synonym_hits else None
+
+
 def _retrieve_candidate_metrics(query: str, tree: KnowledgeTree) -> Dict[str, Any]:
     q = query.lower()
     all_leaves = {n.label: [n.label.lower()] + [a.lower() for a in n.aliases]
@@ -563,7 +583,7 @@ def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[st
 
         # 1. Catch if the LLM accidentally put a category name straight into the metric field
         if metric and not skill_group and metric not in valid_metrics:
-            fallback_group = _resolve_skill_group(metric, valid_branches)
+            fallback_group = _looks_like_bare_category_name(metric, valid_branches)
             if fallback_group:
                 skill_group = fallback_group
                 metric = None
