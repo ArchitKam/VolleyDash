@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from volley_source import FieldRole, FieldSpec, Grain, Source, SourceSchema
+from source import FieldRole, FieldSpec, Grain, Source, SourceSchema
 
 PLAYER_COLUMN = "player_label"
 GAME_COLUMN = "match_label"

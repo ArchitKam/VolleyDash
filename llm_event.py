@@ -1,5 +1,5 @@
 """
-volley_llm.py
+llm_event.py
 ==============
 LLM-backed metric AUTHORING for the event grain. Query ROUTING is not
 re-implemented here: recruiting_llm.decompose_recruiting_query is driven
@@ -16,7 +16,7 @@ needs its own prompt and its own JSON shape.
 
 Same trust boundary as the CSV app: the LLM only ever proposes a
 CANDIDATE. Whatever comes back is run through the real
-MetricSpec.validate() from volley_event_spec.py -- which checks the
+MetricSpec.validate() from event_spec.py -- which checks the
 fields exist, the values occur in these matches, and the evaluation
 code is legal FOR THAT SKILL -- before anything is staged. The model
 cannot invent a skill, a code, or a metric that is not really there.
@@ -26,14 +26,13 @@ import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-import _parent_path  # noqa: F401
 from recruiting_llm import LLMUnavailableError, call_llm
 from recruiting_tree import KnowledgeTree, MetricSpec, NodeKind
 
-from volley_event_spec import (
+from event_spec import (
     COUNT, VALID_AGGREGATES, make_event_spec, make_metric_formula_spec,
 )
-from volley_source import SourceSchema
+from source import SourceSchema
 
 SKILL_FIELD = "skill"
 EVALUATION_FIELD = "evaluation_code"

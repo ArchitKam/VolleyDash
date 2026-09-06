@@ -8,12 +8,11 @@ is worked out by hand in the test (see fake_source.sample_source).
 import pandas as pd
 import pytest
 
-import _parent_path  # noqa: F401
 from recruiting_tree import KnowledgeTree, NodeKind
 
 from fake_source import sample_source
-from volley_evaluate import MetricEvaluationError, evaluate_category, evaluate_metric, universe_index
-from volley_event_spec import make_event_spec, make_measure_spec, make_metric_formula_spec
+from evaluate import MetricEvaluationError, evaluate_category, evaluate_metric, universe_index
+from event_spec import make_event_spec, make_measure_spec, make_metric_formula_spec
 
 SOURCE = sample_source()
 SCHEMA = SOURCE.schema

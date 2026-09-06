@@ -11,7 +11,7 @@ code's meaning depends on the skill it attaches to.
 import pytest
 
 from fake_source import sample_source
-from volley_event_spec import (
+from event_spec import (
     COUNT_DISTINCT, make_event_spec, make_measure_spec, make_metric_formula_spec,
 )
 

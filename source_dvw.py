@@ -1,5 +1,5 @@
 """
-volley_source_dvw.py
+source_dvw.py
 =====================
 EVENT-grain Source over DataVolley .dvw files, via pydatavolley (with
 dvw_patch.py's corrections applied -- without them 4 of the 22 real
@@ -89,7 +89,7 @@ import pandas as pd
 import dvw_patch  # noqa: F401  -- must be imported before DataVolley is constructed
 from datavolley.read_dv import DataVolley
 
-from volley_source import FieldRole, FieldSpec, Grain, Source, SourceSchema
+from source import FieldRole, FieldSpec, Grain, Source, SourceSchema
 
 PLAYER_COLUMN = "player_label"
 GAME_COLUMN = "match_label"

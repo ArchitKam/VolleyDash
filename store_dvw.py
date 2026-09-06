@@ -1,5 +1,5 @@
 """
-volley_store.py
+store_dvw.py
 ================
 Where the DVW app's matches and knowledge tree live.
 
@@ -26,11 +26,10 @@ import json
 import os
 from typing import Dict, List, Optional
 
-import _parent_path  # noqa: F401
 from recruiting_tree import KnowledgeTree, Node, NodeKind
 
-from volley_event_spec import make_event_spec, make_measure_spec, make_metric_formula_spec
-from volley_source import SourceSchema
+from event_spec import make_event_spec, make_measure_spec, make_metric_formula_spec
+from source import SourceSchema
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TREE_PATH = os.path.join(PACKAGE_DIR, "volley_kb_data.json")

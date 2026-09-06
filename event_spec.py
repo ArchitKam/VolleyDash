@@ -1,5 +1,5 @@
 """
-volley_event_spec.py
+event_spec.py
 =====================
 Two more MetricSpec payload kinds -- "event" and "measure" -- plus a
 formula kind whose tokens resolve against METRICS rather than CSV
@@ -37,10 +37,9 @@ already is.
 
 from typing import Callable, Dict, List, Optional, Sequence, Set
 
-import _parent_path  # noqa: F401  -- puts the parent app on sys.path
 from recruiting_tree import MetricSpec
 
-from volley_source import SourceSchema
+from source import SourceSchema
 
 # Aggregates an event spec may ask for. A whitelist, so an unknown one
 # is a validation error rather than an AttributeError at evaluation.
@@ -50,7 +49,7 @@ VALID_AGGREGATES = (COUNT, COUNT_DISTINCT)
 
 # Per-(Player, Game) quantities a "measure" spec may name. These come
 # from Source.measures(), not from counting event rows -- see
-# volley_source_dvw.py for why sets played cannot be counted from
+# source_dvw.py for why sets played cannot be counted from
 # actions without being wrong for liberos.
 SETS_PLAYED = "sets_played"
 VALID_MEASURES = (SETS_PLAYED,)

@@ -21,7 +21,7 @@ import pytest
 import dvw_patch
 from dvw_patch import SET_COLUMNS, get_set
 
-from volley_store import DVW_SEARCH_DIRS as DVW_DIRS
+from store_dvw import DVW_SEARCH_DIRS as DVW_DIRS
 
 
 def upstream_get_set(rows_list):

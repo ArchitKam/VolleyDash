@@ -1,5 +1,5 @@
 """
-volley_seed.py
+seed_dvw.py
 ===============
 Seeds the EVENT-grain knowledge tree: one branch per skill, one leaf per
 PRIMITIVE (a (skill, evaluation_code) count), then the derived rate and
@@ -47,11 +47,10 @@ is aligned.
 
 from typing import Dict, List, Tuple
 
-import _parent_path  # noqa: F401
 from recruiting_tree import KnowledgeTree, NodeKind
 
-from volley_event_spec import SETS_PLAYED, make_event_spec, make_measure_spec, make_metric_formula_spec
-from volley_source import SourceSchema
+from event_spec import SETS_PLAYED, make_event_spec, make_measure_spec, make_metric_formula_spec
+from source import SourceSchema
 
 AUTHOR = "system:dvw_import"
 
@@ -153,7 +152,7 @@ DERIVED: List[Tuple[str, str, str, str, List[str]]] = [
 ]
 
 
-def seed_volley_tree(schema: SourceSchema) -> Tuple[KnowledgeTree, Dict[str, str]]:
+def seed_dvw_tree(schema: SourceSchema) -> Tuple[KnowledgeTree, Dict[str, str]]:
     """
     Build the committed event-grain tree.
 

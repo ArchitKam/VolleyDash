@@ -5,7 +5,7 @@ The decision path from "the router produced a decomposition" to "here is
 a frame to draw", exercised against the real code (not a re-implementation
 of it) with the hand-countable fake source.
 
-Also covers the seed and the round-trip through volley_store, since a
+Also covers the seed and the round-trip through store_dvw, since a
 metric that cannot be saved and reloaded is not really committed.
 """
 
@@ -16,18 +16,17 @@ import tempfile
 import pandas as pd
 import pytest
 
-import _parent_path  # noqa: F401
 from recruiting_operations import Rank, Reduce, Slice
 from recruiting_tree import NodeKind
 
 from fake_source import sample_source
 from test_evaluate import TREE
-from volley_query import (
+from query import (
     consolidate_action_results, execute_query_actions, known_games, known_players,
     metric_format_pattern, resolve_game_hint, resolve_player_name, tidy_data,
 )
-from volley_seed import seed_volley_tree
-from volley_store import load_tree, save_tree, tree_from_json_dict, tree_to_json_dict
+from seed_dvw import seed_dvw_tree
+from store_dvw import load_tree, save_tree, tree_from_json_dict, tree_to_json_dict
 
 SOURCE = sample_source()
 ROSTER = ["#3 Ajack Malual", "#24 Ally Williams", "#44 Eva Rohrbach", "#17 Eva Rohrbach"]
@@ -165,7 +164,7 @@ def test_counts_format_as_whole_numbers_and_rates_do_not():
 # ── seed + persistence ─────────────────────────────────────────
 
 def test_seed_builds_primitives_and_derived_metrics():
-    tree, branches = seed_volley_tree(SOURCE.schema)
+    tree, branches = seed_dvw_tree(SOURCE.schema)
     labels = {n.label for n in tree.committed.values() if n.kind == NodeKind.LEAF}
     assert "Kills" in labels and "Sets Played" in labels
     assert "Kills Per Set" in labels, "derived metrics must seed after their primitives"
@@ -176,14 +175,14 @@ def test_seed_skips_primitives_the_data_cannot_express():
     """The fake source has no Block/Dig rows at all, so those primitives
     must not be committed -- a metric that can only ever return 0 is
     worse than an absent one."""
-    tree, _ = seed_volley_tree(SOURCE.schema)
+    tree, _ = seed_dvw_tree(SOURCE.schema)
     labels = {n.label for n in tree.committed.values() if n.kind == NodeKind.LEAF}
     assert "Kill Blocks" not in labels
     assert "Digs" not in labels
 
 
 def test_seeded_tree_round_trips_through_json():
-    tree, _ = seed_volley_tree(SOURCE.schema)
+    tree, _ = seed_dvw_tree(SOURCE.schema)
     before = {n.label for n in tree.committed.values() if n.kind == NodeKind.LEAF}
 
     with tempfile.TemporaryDirectory() as directory:
@@ -199,7 +198,7 @@ def test_seeded_tree_round_trips_through_json():
 def test_round_trip_preserves_an_event_metrics_where_clause():
     """recruiting_data_store's serializer only knows column/formula and
     would drop the where-clause, i.e. the entire definition."""
-    tree, _ = seed_volley_tree(SOURCE.schema)
+    tree, _ = seed_dvw_tree(SOURCE.schema)
     reloaded = tree_from_json_dict(tree_to_json_dict(tree), SOURCE.schema)
     kills = next(n for n in reloaded.committed.values()
                  if n.kind == NodeKind.LEAF and n.label == "Kills")
@@ -208,8 +207,8 @@ def test_round_trip_preserves_an_event_metrics_where_clause():
 
 
 def test_reloaded_metrics_still_compute():
-    from volley_evaluate import evaluate_metric
-    tree, _ = seed_volley_tree(SOURCE.schema)
+    from evaluate import evaluate_metric
+    tree, _ = seed_dvw_tree(SOURCE.schema)
     reloaded = tree_from_json_dict(tree_to_json_dict(tree), SOURCE.schema)
     spec = next(n for n in reloaded.committed.values()
                 if n.kind == NodeKind.LEAF and n.label == "Kills Per Set").spec
@@ -232,8 +231,8 @@ def test_load_tree_returns_none_for_a_missing_or_corrupt_file():
 # ── staging / diff / merge, inherited from the tree engine ─────
 
 def test_staging_a_metric_does_not_affect_committed_until_merge():
-    from volley_event_spec import make_event_spec
-    tree, branches = seed_volley_tree(SOURCE.schema)
+    from event_spec import make_event_spec
+    tree, branches = seed_dvw_tree(SOURCE.schema)
     spec = make_event_spec({"skill": "Attack", "evaluation_code": "+"}, "positive", SOURCE.schema)
     tree.add_node(label="Positive Swings", kind=NodeKind.LEAF, parent_id=branches["Attack"],
                    to="staging", spec=spec, authored_by="coach")
@@ -250,8 +249,8 @@ def test_staging_a_metric_does_not_affect_committed_until_merge():
 def test_add_node_rejects_an_invalid_event_spec():
     """The trust boundary: a spec naming a (skill, code) pair the data
     never contains is refused on the same path a bad formula is."""
-    from volley_event_spec import make_event_spec
-    tree, branches = seed_volley_tree(SOURCE.schema)
+    from event_spec import make_event_spec
+    tree, branches = seed_dvw_tree(SOURCE.schema)
     bad = make_event_spec({"skill": "Serve", "evaluation_code": "+"}, "bogus", SOURCE.schema)
     with pytest.raises(ValueError):
         tree.add_node(label="Bogus", kind=NodeKind.LEAF, parent_id=branches["Attack"],

@@ -15,12 +15,12 @@ import os
 import pandas as pd
 import pytest
 
-from volley_source import FieldRole, Grain
-from volley_source_dvw import (
+from source import FieldRole, Grain
+from source_dvw import (
     DvwSource, MatchInfo, discover_matches, format_match_day, player_label, shorten_team_name,
 )
 
-from volley_store import DEFAULT_DVW_DIR as DVW_DIR
+from store_dvw import DEFAULT_DVW_DIR as DVW_DIR
 
 
 # ── labels ─────────────────────────────────────────────────────

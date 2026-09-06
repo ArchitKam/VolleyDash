@@ -1,5 +1,5 @@
 """
-volley_query.py
+query.py
 ================
 Everything between "the router produced a decomposition" and "here is a
 frame to draw": name resolution, action execution, the pipeline hand-off,
@@ -25,12 +25,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
-import _parent_path  # noqa: F401
 from recruiting_operations import Operation, Rank, Slice, run_pipeline
 from recruiting_tree import KnowledgeTree, Node, NodeKind
 
-from volley_evaluate import evaluate_category, evaluate_metric
-from volley_source import Source
+from evaluate import evaluate_category, evaluate_metric
+from source import Source
 
 PLAYER_AXIS = "Player"
 GAME_AXIS = "Game"

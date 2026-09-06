@@ -1,5 +1,5 @@
 """
-volley_evaluate.py
+evaluate.py
 ===================
 Evaluates a MetricSpec against a Source and returns the SAME tidy shape
 the existing CSV path produces -- columns Game / Player / Value / Note,
@@ -37,11 +37,10 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import pandas as pd
 
-import _parent_path  # noqa: F401
 from recruiting_tree import KnowledgeTree, MetricSpec, NodeKind
 
-from volley_event_spec import COUNT, COUNT_DISTINCT
-from volley_source import Source
+from event_spec import COUNT, COUNT_DISTINCT
+from source import Source
 
 TOKEN_PATTERN = re.compile(r"\[([^\[\]]+)\]")
 

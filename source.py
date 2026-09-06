@@ -1,5 +1,5 @@
 """
-volley_source.py
+source.py
 =================
 The Source boundary: what the rest of the system is allowed to assume
 about an input file, so nothing above this line knows whether it is
@@ -29,7 +29,7 @@ kinds are even expressible:
 putting the boundary here: a formula composes over other METRICS, not
 over raw fields, so "([Kills] - [Attack Errors]) / [Sets Played]" is
 the same expression in both worlds. Only the resolution of its leaf
-tokens differs, and that is the evaluator's job (volley_evaluate.py),
+tokens differs, and that is the evaluator's job (evaluate.py),
 not the formula's.
 
 Schema note -- vocabularies are DERIVED, NOT DECLARED. The permitted
@@ -147,7 +147,7 @@ class SourceSchema:
 class Source(ABC):
     """
     One input format, adapted. Implementations live in
-    volley_source_csv.py / volley_source_dvw.py.
+    source_csv.py / source_dvw.py.
 
     Deliberately narrow: everything above this line consumes facts() and
     schema and never opens a file, so swapping the format -- or adding a

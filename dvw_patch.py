@@ -7,7 +7,7 @@ rather than a fork so the dependency stays `pip install pydatavolley`
 and an upstream fix later just makes this a no-op.
 
 Import this module (or call apply_patches()) BEFORE constructing
-datavolley.read_dv.DataVolley. volley_source_dvw.py already does.
+datavolley.read_dv.DataVolley. source_dvw.py already does.
 
 ────────────────────────────────────────────────────────────────
 DEFECT 1 -- get_set() crashes on any partially-scored set row
