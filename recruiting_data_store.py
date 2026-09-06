@@ -426,3 +426,40 @@ def load_json_file(path: str) -> Optional[dict]:
     if content and payload.get("encoding", "base64") == "base64":
         return json.loads(base64.b64decode(content).decode("utf-8"))
     return json.loads(_fetch_file_bytes(repo, token, path).decode("utf-8"))
+
+
+def put_file_bytes(repo: str, token: str, path: str, payload: bytes,
+                    message: str, timeout: int = 60) -> str:
+    """
+    Create or replace one file in the private repo.
+
+    Returns "created" or "updated" so a caller can report what actually
+    happened rather than assume. Same create-vs-update rule as
+    save_committed_tree: a PUT with no sha creates, a PUT with the
+    current sha replaces, and a PUT with a STALE sha is rejected by
+    GitHub rather than silently clobbering someone else's write.
+    """
+    url = _contents_url(repo, path)
+    headers = _headers(token)
+
+    existing = requests.get(url, headers=headers, timeout=timeout)
+    if existing.status_code == 200:
+        sha = existing.json()["sha"]
+    elif existing.status_code == 404:
+        sha = None
+    else:
+        raise RuntimeError(
+            f"Couldn't check {path} in {repo} ({existing.status_code}): {existing.text[:300]}"
+        )
+
+    body = {"message": message,
+            "content": base64.b64encode(payload).decode("ascii")}
+    if sha is not None:
+        body["sha"] = sha
+
+    response = requests.put(url, headers=headers, json=body, timeout=timeout)
+    if response.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Upload failed for {path} in {repo} ({response.status_code}): {response.text[:300]}"
+        )
+    return "updated" if sha is not None else "created"

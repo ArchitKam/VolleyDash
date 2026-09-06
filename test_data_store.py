@@ -361,3 +361,51 @@ def test_saving_an_existing_tree_still_sends_its_sha(monkeypatch):
 
     assert captured["payload"]["sha"] == "abc123"
     assert captured["payload"]["message"].startswith("Update")
+
+
+# ──────────────────────────────────────────────────────────────
+# Uploading match files
+# ──────────────────────────────────────────────────────────────
+
+def test_uploading_a_new_file_creates_it(monkeypatch):
+    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(404, {}))
+    captured = {}
+
+    def _fake_put(url, headers=None, json=None, timeout=None):
+        captured.update({"url": url, "payload": json})
+        return _FakeResponse(201, {})
+
+    monkeypatch.setattr(store.requests, "put", _fake_put)
+
+    result = store.put_file_bytes("r/d", "tok", "dvw/a.dvw", b"bytes", "msg")
+    assert result == "created"
+    assert "sha" not in captured["payload"]
+    assert base64.b64decode(captured["payload"]["content"]) == b"bytes"
+
+
+def test_uploading_over_an_existing_file_sends_its_sha(monkeypatch):
+    """A PUT carrying the CURRENT sha replaces; one carrying a stale sha
+    is rejected by GitHub. That is the protection against two writers
+    silently clobbering each other, so the sha must be sent."""
+    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(200, {"sha": "deadbeef"}))
+    captured = {}
+
+    def _fake_put(url, headers=None, json=None, timeout=None):
+        captured["payload"] = json
+        return _FakeResponse(200, {})
+
+    monkeypatch.setattr(store.requests, "put", _fake_put)
+
+    assert store.put_file_bytes("r/d", "tok", "dvw/a.dvw", b"x", "msg") == "updated"
+    assert captured["payload"]["sha"] == "deadbeef"
+
+
+def test_an_unreadable_target_aborts_before_writing(monkeypatch):
+    """Never overwrite a file whose current state could not be read."""
+    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(500, text="boom"))
+    puts = []
+    monkeypatch.setattr(store.requests, "put", lambda *a, **k: puts.append(1))
+
+    with pytest.raises(RuntimeError, match="Couldn't check"):
+        store.put_file_bytes("r/d", "tok", "dvw/a.dvw", b"x", "msg")
+    assert not puts
