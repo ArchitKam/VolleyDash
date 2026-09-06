@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
+from evaluate_csv import game_label as _game_label
 from source import FieldRole, FieldSpec, Grain, Source, SourceSchema
 
 PLAYER_COLUMN = "Player"
@@ -158,8 +159,3 @@ class CsvSource(Source):
         return SourceSchema(fields=fields)
 
 
-def _game_label(game: object) -> str:
-    """GameInfo.opponent is what the CSV path has always used as the
-    Game axis value; a plain string is accepted so tests need not build
-    a GameInfo."""
-    return str(getattr(game, "opponent", game))

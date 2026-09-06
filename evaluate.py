@@ -40,7 +40,7 @@ import pandas as pd
 from recruiting_tree import KnowledgeTree, MetricSpec, NodeKind
 
 from event_spec import COUNT, COUNT_DISTINCT
-from evaluate_csv import compute_for_all_players
+from evaluate_csv import run_category_query, run_metric_query
 from source import GAME_AXIS, PLAYER_AXIS, SET_AXIS, Grain, Source
 
 TOKEN_PATTERN = re.compile(r"\[([^\[\]]+)\]")
@@ -349,17 +349,8 @@ def _evaluate_metric_measure(spec: MetricSpec, source: Source, tree: KnowledgeTr
     if frames is None:
         raise MetricEvaluationError("A measure-grain source must expose frames().")
 
-    records = []
-    for game, frame in frames():
-        label = str(getattr(game, "opponent", game))
-        for name, result in compute_for_all_players(spec, frame, tree=tree):
-            if player is not None and name != player:
-                continue
-            records.append({
-                GAME_AXIS: label, PLAYER_AXIS: name,
-                "Value": result.value, "Note": result.error or "",
-            })
-    return pd.DataFrame(records, columns=OUTPUT_COLUMNS)
+    frame = run_metric_query(spec, tree, frames(), player_name=player)
+    return frame[OUTPUT_COLUMNS].reset_index(drop=True)
 
 
 def _evaluate_metric_event(spec: MetricSpec, source: Source, tree: KnowledgeTree,
@@ -421,6 +412,12 @@ def evaluate_category(tree: KnowledgeTree, branch_node_id: str, source: Source,
     branch = tree.committed.get(branch_node_id)
     if branch is None or branch.kind != NodeKind.BRANCH:
         return pd.DataFrame(columns=columns)
+
+    if source.grain is Grain.MEASURE:
+        measure_frames = getattr(source, "frames", None)
+        if measure_frames is None:
+            raise MetricEvaluationError("A measure-grain source must expose frames().")
+        return run_category_query(tree, branch_node_id, measure_frames(), player_name=player)
 
     frames = []
     for leaf_id in branch.children:

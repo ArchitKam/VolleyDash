@@ -38,6 +38,7 @@ from recruiting_llm import (
 )
 from recruiting_operations import Reduce, Rank, Compare, Slice, ValuePredicate
 from recruiting_tree import KnowledgeTree
+from source_csv import CsvSource
 
 # The real recruiting_kb_data.json now lives in the private VolleyData repo,
 # not on local disk -- app.load_committed_tree() needs live GITHUB_DATA_REPO/
@@ -106,90 +107,21 @@ def _run_repaired_actions(raw_decomposition: dict, tree: KnowledgeTree,
                            game_dfs: List[Tuple["app.GameInfo", pd.DataFrame]],
                            known_player_pool: List[str]) -> List[dict]:
     """
-    Mirrors the REAL action-execution loop inside app.py's `with tab_qa:`
-    block line for line (same functions, same fetch_player/pipeline/
-    auto-append-Slice logic) but driven directly in a test, without a
-    Streamlit runtime. Kept as a small local helper (not extracted into
-    app.py itself) since app.py's loop is UI code interleaved with widget
-    calls -- this reproduces its DECISION logic exactly, calling only the
-    real, non-Streamlit functions it calls.
+    Repairs a raw decomposition and runs it through the REAL action
+    executor.
+
+    This used to reproduce app.py's loop by hand, with a comment saying
+    it mirrored that loop "line for line". That was true when written
+    and became a liability the moment the loop moved: a hand copy of
+    production logic tests the copy. It now calls the shipped function,
+    so these tests fail when the app changes rather than when someone
+    forgets to update a duplicate.
+
+    `known_player_pool` is no longer passed: the roster comes from the
+    source, which is where the app gets it too.
     """
     decomposition = _validate_and_repair(raw_decomposition, tree)
-    action_results = []
-
-    for action in decomposition.get("actions", []):
-        is_category = bool(action.get("skill_group"))
-        pipeline = action.get("pipeline") or []
-
-        if is_category:
-            branch_id = app.get_branches(tree).get(action["skill_group"])
-            if branch_id is None:
-                action_results.append({"action": action, "error": "Category no longer exists."})
-                continue
-        else:
-            leaf = app.find_leaf_by_exact_label(tree, action.get("metric_of_interest"))
-            if leaf is None or leaf.spec is None:
-                raw_metric_name = action.get("metric_of_interest") or "Unknown Metric"
-                unrecognized_lower = {t.lower() for t in decomposition.get("unrecognized_terms", [])}
-                action_results.append({
-                    "action": action, "status": "missing_metric",
-                    "raw_metric_name": raw_metric_name,
-                    "is_gibberish": raw_metric_name.strip().lower() in unrecognized_lower,
-                })
-                continue
-
-        # Mirrors app.py's raw_player/multi_players handling exactly: a
-        # merged action's "player" field can be a LIST of raw hints
-        # (merge_same_shape_actions, recruiting_llm.py), each of which
-        # still needs resolving individually against the real roster.
-        raw_player = action.get("player")
-        if isinstance(raw_player, list):
-            resolved_players = []
-            seen_players = set()
-            for hint in raw_player:
-                candidate = app.resolve_player_name(hint, known_player_pool)
-                if candidate is not None and candidate not in seen_players:
-                    seen_players.add(candidate)
-                    resolved_players.append(candidate)
-            multi_players = resolved_players if len(resolved_players) >= 2 else None
-            resolved_player = resolved_players[0] if len(resolved_players) == 1 else None
-        else:
-            resolved_player = app.resolve_player_name(raw_player, known_player_pool)
-            multi_players = None
-        action_games = [g for g, _ in game_dfs]  # tests pre-resolve games directly
-
-        fetch_player = None if (pipeline or multi_players) else resolved_player
-        if is_category:
-            result_df = app.run_category_query(tree, branch_id, game_dfs, player_name=fetch_player)
-        else:
-            result_df = app.run_metric_query(leaf.spec, tree, game_dfs, player_name=fetch_player)
-
-        pipeline_notes: List[str] = []
-        if pipeline or multi_players:
-            pipeline = list(pipeline)
-            has_player_slice = any(isinstance(op, Slice) and op.axis == "Player" for op in pipeline)
-            if not has_player_slice:
-                if multi_players:
-                    pipeline.append(Slice(axis="Player", keep=multi_players))
-                elif resolved_player is not None:
-                    pipeline.append(Slice(axis="Player", keep=[resolved_player]))
-            has_metric_slice = any(isinstance(op, Slice) and op.axis == "Metric" for op in pipeline)
-            primary_metric = action.get("metric_of_interest")
-            if not is_category and primary_metric and not has_metric_slice:
-                pipeline.append(Slice(axis="Metric", keep=[primary_metric]))
-            combined_df, fetch_notes = app.prepare_pipeline_frame(
-                result_df, pipeline, action.get("metric_of_interest"), tree, game_dfs,
-            )
-            result_df, run_notes = app.run_pipeline(combined_df, pipeline)
-            pipeline_notes = fetch_notes + run_notes
-
-        action_results.append({
-            "action": action, "is_category": is_category, "resolved_player": resolved_player,
-            "action_games": action_games, "result_df": result_df,
-            "pipeline": pipeline, "pipeline_notes": pipeline_notes,
-        })
-
-    return action_results
+    return app.execute_query_actions(decomposition, tree, CsvSource(game_dfs))
 
 
 KNOWN_PLAYERS = ["#7 Sloan T.", "#22 Azana S."]

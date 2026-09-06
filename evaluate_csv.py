@@ -26,8 +26,12 @@ that gets there.
 import ast
 import math
 import re
+from typing import TYPE_CHECKING
 from dataclasses import dataclass, field
 from typing import Any, FrozenSet, List, Optional, Tuple
+
+if TYPE_CHECKING:  # pragma: no cover
+    from recruiting_data_store import GameInfo
 
 import pandas as pd
 
@@ -274,3 +278,64 @@ def compute_for_all_players(spec: MetricSpec, df: pd.DataFrame,
         result.row_label = str(row[name_col])
         results.append((str(row[name_col]), result))
     return results
+
+
+# ──────────────────────────────────────────────────────────────
+# CUBE CONSTRUCTION
+# ──────────────────────────────────────────────────────────────
+# The one measure-grain implementation. evaluate._evaluate_metric_measure
+# calls straight into this rather than restating it, so "the unified path
+# agrees with the old path" is structural instead of a coincidence two
+# copies have to keep re-earning.
+
+def game_label(game: object) -> str:
+    """
+    The Game axis value for one match.
+
+    GameInfo.opponent is what the CSV path has always used; a plain
+    string is accepted so a caller (and a test) need not build a
+    GameInfo. Defined once and imported by source_csv, because two
+    copies of "what is this game called" that drift produce a cube whose
+    rows silently fail to line up.
+    """
+    return str(getattr(game, "opponent", game))
+
+
+def run_metric_query(
+    spec: MetricSpec, tree: KnowledgeTree,
+    game_dfs: List[Tuple["GameInfo", pd.DataFrame]],
+    player_name: Optional[str] = None, name_col: str = "Name",
+) -> pd.DataFrame:
+    records = []
+    for game, df in game_dfs:
+        for name, result in compute_for_all_players(spec, df, tree=tree, name_col=name_col):
+            if player_name is not None and name != player_name:
+                continue
+            records.append({
+                "Game": game_label(game), "Player": name,
+                "Value": result.value, "Note": result.error or "",
+            })
+    return pd.DataFrame(records, columns=["Game", "Player", "Value", "Note"])
+
+
+def run_category_query(
+    tree: KnowledgeTree, branch_node_id: str,
+    game_dfs: List[Tuple["GameInfo", pd.DataFrame]],
+    player_name: Optional[str] = None, name_col: str = "Name",
+) -> pd.DataFrame:
+    branch = tree.committed.get(branch_node_id)
+    if branch is None or branch.kind != NodeKind.BRANCH:
+        return pd.DataFrame(columns=["Metric", "Game", "Player", "Value", "Note"])
+
+    frames = []
+    for leaf_id in branch.children:
+        leaf = tree.committed.get(leaf_id)
+        if not leaf or leaf.kind != NodeKind.LEAF or not leaf.spec:
+            continue
+        leaf_df = run_metric_query(leaf.spec, tree, game_dfs, player_name=player_name, name_col=name_col)
+        leaf_df.insert(0, "Metric", leaf.label)
+        frames.append(leaf_df)
+
+    if not frames:
+        return pd.DataFrame(columns=["Metric", "Game", "Player", "Value", "Note"])
+    return pd.concat(frames, ignore_index=True)

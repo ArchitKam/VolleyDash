@@ -34,6 +34,7 @@ import app
 import recruiting_data_store
 from recruiting_llm import _validate_and_repair
 from recruiting_operations import pipeline_to_dicts
+from source_csv import CsvSource
 from recruiting_tree import KnowledgeTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -82,12 +83,12 @@ def synthetic_games() -> List[Tuple[Any, pd.DataFrame]]:
 
 
 @pytest.fixture
-def patched_loader(monkeypatch, synthetic_games):
-    """execute_query_actions fetches CSVs itself; point that at the
-    synthetic frames so the lock never depends on network or secrets."""
-    by_path = {game.path: frame for game, frame in synthetic_games}
-    monkeypatch.setattr(app, "load_game_df", lambda path: by_path[path])
-    return by_path
+def patched_loader(synthetic_games):
+    """Kept as a fixture so the test signatures below are unchanged from
+    when they were recorded. Nothing to patch any more: after
+    unification the frames go in through CsvSource rather than being
+    fetched by the query layer, which is the point."""
+    return synthetic_games
 
 
 # ──────────────────────────────────────────────────────────────
@@ -212,7 +213,10 @@ def _snapshot(action_results: List[dict], consolidated: pd.DataFrame) -> dict:
             "is_category": result.get("is_category"),
             "resolved_player": result.get("resolved_player"),
             "game_note": result.get("game_note"),
-            "games": [g.opponent for g in result.get("action_games") or []],
+            # action_games is a list of Game-axis LABELS now rather than
+        # GameInfo objects. The values are the same strings, which is why
+        # the recorded snapshot is expected to be unchanged.
+        "games": [str(g) for g in result.get("action_games") or []],
             "pipeline": pipeline_to_dicts(result.get("pipeline") or []),
             "pipeline_notes": result.get("pipeline_notes") or [],
             "result": _frame_to_records(result.get("result_df")),
@@ -220,12 +224,9 @@ def _snapshot(action_results: List[dict], consolidated: pd.DataFrame) -> dict:
     return {"actions": entries, "consolidated": _frame_to_records(consolidated)}
 
 
-def _run_case(raw: dict, tree: KnowledgeTree, games: List[Any]) -> dict:
+def _run_case(raw: dict, tree: KnowledgeTree, source) -> dict:
     decomposition = _validate_and_repair(dict(raw), tree)
-    action_results = app.execute_query_actions(
-        decomposition, tree, known_games=games, known_player_pool=KNOWN_PLAYERS,
-        selected_games=games,
-    )
+    action_results = app.execute_query_actions(decomposition, tree, source)
     consolidated = app.consolidate_action_results(action_results)
     return _snapshot(action_results, consolidated)
 
@@ -235,8 +236,8 @@ def _run_case(raw: dict, tree: KnowledgeTree, games: List[Any]) -> dict:
 # ──────────────────────────────────────────────────────────────
 
 def _current(tree, synthetic_games) -> dict:
-    games = [game for game, _ in synthetic_games]
-    return {name: _run_case(raw, tree, games) for name, raw in sorted(CASES.items())}
+    source = CsvSource(synthetic_games)
+    return {name: _run_case(raw, tree, source) for name, raw in sorted(CASES.items())}
 
 
 def test_recruiting_behaviour_matches_the_golden_snapshot(real_tree, synthetic_games, patched_loader):

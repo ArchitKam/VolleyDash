@@ -110,38 +110,24 @@ QA_SAMPLE_QUESTIONS = [
 
 
 # ──────────────────────────────────────────────────────────────
-# GAME SUPPORT 
+# QUERY LAYER -- now shared, see query.py
 # ──────────────────────────────────────────────────────────────
-
-def _word_prefix_match(hint_words: List[str], name_words: List[str]) -> bool:
-    return all(
-        any(hw == nw or nw.startswith(hw) or hw.startswith(nw) for nw in name_words)
-        for hw in hint_words
-    )
-
-
-def resolve_game_hint(hint: Optional[str], games: List[GameInfo]) -> List[GameInfo]:
-    if not hint or not hint.strip() or not games:
-        return []
-    needle = hint.strip().lower()
-
-    exact = [g for g in games if g.opponent.lower() == needle]
-    if exact:
-        return exact
-
-    substring = [g for g in games if needle in g.opponent.lower() or g.opponent.lower() in needle]
-    if substring:
-        return substring
-
-    needle_words = needle.split()
-    prefix_hits = [g for g in games if _word_prefix_match(needle_words, g.opponent.lower().split())]
-    if prefix_hits:
-        return prefix_hits
-
-    fuzzy = [g for g in games
-             if difflib.SequenceMatcher(None, needle, g.opponent.lower()).ratio() >= 0.75]
-    return fuzzy
-
+# Name resolution, pipeline preparation, action execution and the
+# tidy/consolidate step are format-agnostic: they work against a Source
+# and a KnowledgeTree, so the same code answers a question about a
+# Huddle export and about a play-by-play file. They were duplicated
+# here and in the DVW app; this is the surviving copy's import.
+#
+# Re-exported under the names app.py already published, because the test
+# suite reaches for app.X and moving the bodies out must not move the
+# names.
+from query import (  # noqa: E402,F401
+    _pipeline_referenced_metrics, _word_prefix_match, collect_leaf_labels,
+    consolidate_action_results, execute_query_actions, find_leaf_by_exact_label,
+    format_table as format_tidy_table, get_branches,
+    metric_format_pattern as get_metric_format_pattern, prepare_pipeline_frame,
+    resolve_game_hint, resolve_player_name, tidy_data,
+)
 
 # ──────────────────────────────────────────────────────────────
 # SPEC EXECUTOR -- now shared, see evaluate_csv.py
@@ -153,300 +139,10 @@ from evaluate_csv import (  # noqa: E402,F401
     _ALLOWED_AST_NODES, _COLUMN_REF_PATTERN, _evaluate_spec_for_row,
     _find_leaf_by_label, _resolve_token_value, EvalResult, RowPick,
     build_substituted_expr, coerce_cell_to_float, compute_for_all_players,
-    evaluate_spec, pick_example_row, referenced_columns, safe_eval_arithmetic,
+    evaluate_spec, pick_example_row, referenced_columns, run_category_query,
+    run_metric_query, safe_eval_arithmetic,
 )
 
-
-
-def resolve_player_name(hint: Optional[str], known_names: List[str]) -> Optional[str]:
-    if not hint or not hint.strip() or not known_names:
-        return None
-    needle = hint.strip().lower()
-
-    exact = [n for n in known_names if n.strip().lower() == needle]
-    if exact:
-        return exact[0]
-
-    def _strip_jersey(name: str) -> str:
-        return re.sub(r"^#\S*\s*", "", name).strip().lower()
-
-    substring = [n for n in known_names
-                 if needle in _strip_jersey(n) or _strip_jersey(n) in needle]
-    if substring:
-        return substring[0]
-
-    fuzzy = [n for n in known_names
-             if difflib.SequenceMatcher(None, needle, _strip_jersey(n)).ratio() >= 0.75]
-    return fuzzy[0] if fuzzy else None
-
-
-def run_metric_query(
-    spec: MetricSpec, tree: KnowledgeTree,
-    game_dfs: List[Tuple[GameInfo, pd.DataFrame]],
-    player_name: Optional[str] = None, name_col: str = "Name",
-) -> pd.DataFrame:
-    records = []
-    for game, df in game_dfs:
-        for name, result in compute_for_all_players(spec, df, tree=tree, name_col=name_col):
-            if player_name is not None and name != player_name:
-                continue
-            records.append({
-                "Game": game.opponent, "Player": name,
-                "Value": result.value, "Note": result.error or "",
-            })
-    return pd.DataFrame(records, columns=["Game", "Player", "Value", "Note"])
-
-
-def run_category_query(
-    tree: KnowledgeTree, branch_node_id: str,
-    game_dfs: List[Tuple[GameInfo, pd.DataFrame]],
-    player_name: Optional[str] = None, name_col: str = "Name",
-) -> pd.DataFrame:
-    branch = tree.committed.get(branch_node_id)
-    if branch is None or branch.kind != NodeKind.BRANCH:
-        return pd.DataFrame(columns=["Metric", "Game", "Player", "Value", "Note"])
-
-    frames = []
-    for leaf_id in branch.children:
-        leaf = tree.committed.get(leaf_id)
-        if not leaf or leaf.kind != NodeKind.LEAF or not leaf.spec:
-            continue
-        leaf_df = run_metric_query(leaf.spec, tree, game_dfs, player_name=player_name, name_col=name_col)
-        leaf_df.insert(0, "Metric", leaf.label)
-        frames.append(leaf_df)
-
-    if not frames:
-        return pd.DataFrame(columns=["Metric", "Game", "Player", "Value", "Note"])
-    return pd.concat(frames, ignore_index=True)
-
-
-def _pipeline_referenced_metrics(pipeline: List[Operation]) -> Set[str]:
-    referenced: Set[str] = set()
-    for op in pipeline:
-        if isinstance(op, Slice) and op.predicate is not None:
-            referenced.add(op.predicate.metric)
-    return referenced
-
-
-def prepare_pipeline_frame(
-    result_df: pd.DataFrame, pipeline: List[Operation], primary_metric_label: Optional[str],
-    tree: KnowledgeTree, game_dfs: List[Tuple["GameInfo", pd.DataFrame]],
-) -> Tuple[pd.DataFrame, List[str]]:
-    notes: List[str] = []
-    if "Metric" not in result_df.columns:
-        result_df = result_df.copy()
-        result_df.insert(0, "Metric", primary_metric_label)
-
-    already_have = set(result_df["Metric"].dropna().unique())
-    extra_needed = _pipeline_referenced_metrics(pipeline) - already_have
-
-    frames = [result_df]
-    for extra_label in sorted(extra_needed):
-        extra_leaf = find_leaf_by_exact_label(tree, extra_label)
-        if extra_leaf is None or extra_leaf.spec is None:
-            notes.append(f"Pipeline referenced unknown metric '{extra_label}' -- skipped.")
-            continue
-        extra_df = run_metric_query(extra_leaf.spec, tree, game_dfs, player_name=None)
-        extra_df.insert(0, "Metric", extra_label)
-        frames.append(extra_df)
-
-    combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-    return combined, notes
-
-
-# ──────────────────────────────────────────────────────────────
-# ACTION EXECUTION 
-# ──────────────────────────────────────────────────────────────
-
-def execute_query_actions(
-    decomposition: Dict[str, Any], tree: KnowledgeTree, known_games: List[GameInfo],
-    known_player_pool: List[str], selected_games: List[GameInfo],
-    player_filter: Optional[List[str]] = None,
-) -> List[dict]:
-    unrecognized_lower = {t.lower() for t in decomposition.get("unrecognized_terms", [])}
-    action_results = []
-    for action in decomposition.get("actions", []):
-        is_category = bool(action.get("skill_group"))
-        pipeline = action.get("pipeline") or []
-
-        if is_category:
-            branch_id = get_branches(tree).get(action["skill_group"])
-            if branch_id is None:
-                action_results.append({"action": action, "error": "Category no longer exists in committed tree."})
-                continue
-        else:
-            leaf = find_leaf_by_exact_label(tree, action.get("metric_of_interest"))
-            if leaf is None or leaf.spec is None:
-                raw_metric_name = action.get("metric_of_interest") or "Unknown Metric"
-                is_gibberish = raw_metric_name.strip().lower() in unrecognized_lower
-                action_results.append({
-                    "action": action,
-                    "status": "missing_metric",
-                    "raw_metric_name": raw_metric_name,
-                    "is_gibberish": is_gibberish,
-                })
-                continue
-
-        if player_filter:
-            resolved_player = player_filter[0] if len(player_filter) == 1 else None
-            multi_players = player_filter if len(player_filter) >= 2 else None
-        else:
-            raw_player = action.get("player")
-            if isinstance(raw_player, list):
-                resolved_players = []
-                seen_players = set()
-                for hint in raw_player:
-                    candidate = resolve_player_name(hint, known_player_pool)
-                    if candidate is not None and candidate not in seen_players:
-                        seen_players.add(candidate)
-                        resolved_players.append(candidate)
-                multi_players = resolved_players if len(resolved_players) >= 2 else None
-                resolved_player = resolved_players[0] if len(resolved_players) == 1 else None
-            else:
-                resolved_player = resolve_player_name(raw_player, known_player_pool)
-                multi_players = None
-
-        game_note = None
-        if action.get("game_hint"):
-            hint_games = resolve_game_hint(action["game_hint"], known_games)
-            if hint_games:
-                action_games = hint_games
-            else:
-                action_games = selected_games
-                game_note = f"Couldn't identify game '{action['game_hint']}' -- showing all selected games instead."
-        else:
-            action_games = selected_games
-
-        game_dfs = [(g, load_game_df(g.path)) for g in action_games]
-        fetch_player = None if (pipeline or multi_players or player_filter) else resolved_player
-        
-        if is_category:
-            result_df = run_category_query(tree, branch_id, game_dfs, player_name=fetch_player)
-        else:
-            result_df = run_metric_query(leaf.spec, tree, game_dfs, player_name=fetch_player)
-
-        pipeline_notes: List[str] = []
-        if pipeline or multi_players or player_filter:
-            pipeline = list(pipeline)
-            if player_filter:
-                pipeline = [op for op in pipeline if not (isinstance(op, Slice) and op.axis == "Player")]
-                pipeline.append(Slice(axis="Player", keep=player_filter))
-            else:
-                has_player_slice = any(isinstance(op, Slice) and op.axis == "Player" for op in pipeline)
-                if not has_player_slice:
-                    if multi_players:
-                        pipeline.append(Slice(axis="Player", keep=multi_players))
-                    elif resolved_player is not None:
-                        pipeline.append(Slice(axis="Player", keep=[resolved_player]))
-
-            has_metric_slice = any(isinstance(op, Slice) and op.axis == "Metric" for op in pipeline)
-            primary_metric = action.get("metric_of_interest")
-            if not is_category and primary_metric and not has_metric_slice:
-                pipeline.append(Slice(axis="Metric", keep=[primary_metric]))
-
-            combined_df, fetch_notes = prepare_pipeline_frame(
-                result_df, pipeline, action.get("metric_of_interest"), tree, game_dfs,
-            )
-            result_df, run_notes = run_pipeline(combined_df, pipeline)
-            pipeline_notes = fetch_notes + run_notes
-
-        action_results.append({
-            "action": action, "is_category": is_category, "resolved_player": resolved_player,
-            "action_games": action_games, "game_note": game_note, "result_df": result_df,
-            "pipeline": pipeline, "pipeline_notes": pipeline_notes,
-        })
-
-    return action_results
-
-
-# ──────────────────────────────────────────────────────────────
-# SEMANTIC TIDY DATA & CONSOLIDATION ENGINE
-# ──────────────────────────────────────────────────────────────
-
-def tidy_data(df: pd.DataFrame, metric_label: Optional[str] = None) -> pd.DataFrame:
-    tidy = df.copy()
-    if "Metric" not in tidy.columns:
-        tidy.insert(0, "Metric", metric_label)
-    tidy["Value"] = pd.to_numeric(tidy["Value"], errors="coerce")
-
-    wide = tidy.pivot(index=["Player", "Game"], columns="Metric", values="Value")
-    wide = wide.reset_index()
-    wide.columns.name = None
-    return wide.sort_values(["Player", "Game"], kind="stable").reset_index(drop=True)
-
-
-def consolidate_action_results(action_results: List[dict]) -> pd.DataFrame:
-    wide_frames = []
-
-    for item in action_results:
-        if "error" in item or item.get("status") == "missing_metric" or item.get("result_df") is None or item["result_df"].empty:
-            continue
-        
-        res_df = item["result_df"]
-        action = item["action"]
-        metric_label = action.get("metric_of_interest")
-        
-        wide = tidy_data(res_df, metric_label=metric_label)
-        if not wide.empty:
-            wide_frames.append(wide)
-
-    if not wide_frames:
-        return pd.DataFrame()
-
-    consolidated = wide_frames[0]
-    for next_frame in wide_frames[1:]:
-        metric_cols = [c for c in next_frame.columns if c not in ("Player", "Game")]
-        shared_cols = [c for c in metric_cols if c in consolidated.columns]
-        new_cols = [c for c in metric_cols if c not in consolidated.columns]
-
-        merge_cols = ["Player", "Game"] + shared_cols + new_cols
-        consolidated = pd.merge(
-            consolidated, next_frame[merge_cols], on=["Player", "Game"],
-            how="outer", suffixes=("", "_dup"),
-        )
-        for col in shared_cols:
-            dup_col = f"{col}_dup"
-            if dup_col in consolidated.columns:
-                consolidated[col] = consolidated[col].combine_first(consolidated[dup_col])
-                consolidated = consolidated.drop(columns=[dup_col])
-
-    return consolidated.sort_values(["Player", "Game"], kind="stable").reset_index(drop=True)
-
-
-def get_metric_format_pattern(tree: KnowledgeTree, metric_label: str) -> str:
-    node = find_leaf_by_exact_label(tree, metric_label)
-    lbl_lower = metric_label.lower()
-
-    if "%" in lbl_lower or "pct" in lbl_lower or "percentage" in lbl_lower or "efficiency" in lbl_lower or ("rate" in lbl_lower and "success" in lbl_lower):
-        return "{:.1%}"
-
-    if node and node.spec:
-        payload = node.spec.payload
-        if payload.get("kind") == "column":
-            col_ref = payload.get("column_ref")
-            col_spec = RECRUITING_COLUMN_SCHEMA.get(col_ref)
-            if col_spec:
-                if col_spec.type == ColumnType.PERCENTAGE:
-                    return "{:.1%}"
-                elif col_spec.type in (ColumnType.RATE, ColumnType.RATING):
-                    return "{:.2f}"
-                elif col_spec.type == ColumnType.COUNT:
-                    return "{:.0f}"
-
-    if "per set" in lbl_lower or "/s" in lbl_lower or "rating" in lbl_lower or "rtg" in lbl_lower:
-        return "{:.2f}"
-
-    return "{:.2f}"
-
-
-def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree):
-    """Applies semantic formatting and clean dash fills for missing values."""
-    format_dict = {}
-    for col in df.columns:
-        if col in ["Player", "Game"]:
-            continue
-        format_dict[col] = get_metric_format_pattern(tree, str(col))
-    return df.style.format(format_dict, na_rep="—")
 
 
 # ──────────────────────────────────────────────────────────────

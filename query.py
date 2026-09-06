@@ -72,11 +72,31 @@ def resolve_player_name(hint: Optional[str], known_players: List[str]) -> Option
     return fuzzy[0] if fuzzy else None
 
 
+def _word_prefix_match(hint_words: List[str], name_words: List[str]) -> bool:
+    """Every word of the hint must match some word of the name, by
+    equality or by either being a prefix of the other -- so "penn st"
+    finds "Penn State" without "st" also matching "Michigan State"
+    through a bare substring test."""
+    return all(
+        any(hw == nw or nw.startswith(hw) or hw.startswith(nw) for nw in name_words)
+        for hw in hint_words
+    )
+
+
 def resolve_game_hint(hint: Optional[str], known_games: List[str]) -> List[str]:
-    """Returns EVERY match the hint could mean, not one: this corpus has
-    three opponents played twice, so "the Penn State game" legitimately
-    resolves to two matches and the caller shows both rather than
-    silently picking one."""
+    """
+    Returns EVERY match the hint could mean, not one: three opponents
+    are played twice in this corpus, so "the Penn State game"
+    legitimately resolves to two matches and the caller shows both
+    rather than silently picking one.
+
+    Four tiers, tried in order and stopping at the first that hits.
+    These are the CSV app's tiers, kept exactly -- including the
+    bidirectional substring test and the 0.75 fuzzy threshold -- because
+    changing them would change which match a recruiting question
+    resolves to, which is a silent wrong answer rather than a visible
+    failure.
+    """
     if not hint or not hint.strip() or not known_games:
         return []
     needle = hint.strip().lower()
@@ -85,12 +105,20 @@ def resolve_game_hint(hint: Optional[str], known_games: List[str]) -> List[str]:
     if exact:
         return exact
 
-    substring = [g for g in known_games if needle in g.lower()]
+    # Bidirectional: the hint may be longer than the name ("the Purdue
+    # game") or shorter than it ("Purdue" against "Purdue (Nov 15)").
+    substring = [g for g in known_games if needle in g.lower() or g.lower() in needle]
     if substring:
         return substring
 
+    needle_words = needle.split()
+    prefix_hits = [g for g in known_games
+                   if _word_prefix_match(needle_words, g.lower().split())]
+    if prefix_hits:
+        return prefix_hits
+
     fuzzy = [g for g in known_games
-             if difflib.SequenceMatcher(None, needle, g.lower()).ratio() >= 0.7]
+             if difflib.SequenceMatcher(None, needle, g.lower()).ratio() >= 0.75]
     return fuzzy
 
 
@@ -246,9 +274,12 @@ def execute_query_actions(decomposition: Dict[str, Any], tree: KnowledgeTree, so
                 action_games = hits
             else:
                 action_games = selected_games
+                # Wording is the CSV app's, verbatim: this string is
+                # shown to a coach, and the golden lock treats a change
+                # to it as the behaviour change it is.
                 game_note = (
                     f"Couldn't identify game '{action['game_hint']}' -- "
-                    "showing all selected matches instead."
+                    "showing all selected games instead."
                 )
         else:
             action_games = selected_games
