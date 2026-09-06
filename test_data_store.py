@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 import recruiting_data_store as store
-from recruiting_tree import NodeKind, seed_recruiting_tree
+from recruiting_tree import KnowledgeTree, NodeKind, seed_recruiting_tree
 
 
 @pytest.fixture(autouse=True)
@@ -113,17 +113,41 @@ def test_save_committed_tree_sha_fetch_then_put_sequence(monkeypatch):
 
 
 def test_save_committed_tree_get_failure_raises(monkeypatch):
+    """A GET that FAILS still aborts the save. 404 is excluded on
+    purpose -- see the test below -- so this uses a server error, which
+    is the case the guard is actually for: never PUT over a file whose
+    current state could not be read."""
     monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
     monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
     tree, _ = seed_recruiting_tree()
 
-    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(404, text="Not Found"))
+    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(500, text="Server Error"))
     put_calls = []
     monkeypatch.setattr(store.requests, "put", lambda *a, **k: put_calls.append(1))
 
     with pytest.raises(RuntimeError, match="sha"):
         store.save_committed_tree(tree)
-    assert put_calls == []  # never reaches PUT if the sha fetch fails
+    assert not put_calls, "a failed sha lookup must not be followed by a write"
+
+
+def test_a_missing_file_is_created_rather_than_treated_as_a_failure(monkeypatch):
+    """Previously a 404 here raised, which meant a knowledge base that
+    did not exist yet could never be saved -- so seed-then-save could
+    never bootstrap, for either workspace."""
+    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
+    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
+    tree, _ = seed_recruiting_tree()
+
+    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(404, text="Not Found"))
+    captured = {}
+
+    def _fake_put(url, headers=None, json=None, timeout=None):
+        captured["payload"] = json
+        return _FakeResponse(201, {})
+
+    monkeypatch.setattr(store.requests, "put", _fake_put)
+    store.save_committed_tree(tree)
+    assert "sha" not in captured["payload"]
 
 
 def test_save_committed_tree_put_failure_raises(monkeypatch):
@@ -240,3 +264,100 @@ def test_load_game_df_fetches_and_parses_csv_content(monkeypatch):
     assert list(df.columns) == ["Name", "Attack K", "Attack E"]
     assert df.iloc[0]["Name"] == "#7 Sloan T."
     assert df.iloc[0]["Attack K"] == 12
+
+
+# ──────────────────────────────────────────────────────────────
+# Files at or above 1 MB
+# ──────────────────────────────────────────────────────────────
+
+def test_a_file_too_large_to_inline_is_refetched_as_raw(monkeypatch):
+    """GitHub's Contents API inlines file bytes as base64 only BELOW
+    1 MB. At or above it the request still returns 200, with
+    "encoding": "none" and an empty content field -- a success response
+    containing no file. Before this fallback that decoded to b"" and
+    surfaced as an empty CSV rather than an error."""
+    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
+    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
+
+    big = b"Name,Attack K\n#7 Sloan T.,12\n"
+    seen = []
+
+    class _Raw:
+        status_code = 200
+        content = big
+        text = ""
+
+    def _fake_get(url, headers=None, timeout=None):
+        seen.append(headers["Accept"])
+        if headers["Accept"] == "application/vnd.github.v3.raw":
+            return _Raw()
+        return _FakeResponse(200, {"content": "", "encoding": "none"})
+
+    monkeypatch.setattr(store.requests, "get", _fake_get)
+
+    assert store._fetch_file_bytes("ArchitKam/VolleyData", "fake-token", "big.csv") == big
+    assert seen == ["application/vnd.github+json", "application/vnd.github.v3.raw"], (
+        "the raw refetch must happen only after the inline attempt reports it could not"
+    )
+
+
+def test_a_small_file_is_never_refetched(monkeypatch):
+    """The fallback must cost nothing on the path that already worked."""
+    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
+    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
+
+    calls = []
+
+    def _fake_get(url, headers=None, timeout=None):
+        calls.append(headers["Accept"])
+        return _FakeResponse(200, {"content": _b64("hello"), "encoding": "base64"})
+
+    monkeypatch.setattr(store.requests, "get", _fake_get)
+    assert store._fetch_file_bytes("r", "t", "small.csv") == b"hello"
+    assert calls == ["application/vnd.github+json"]
+
+
+def test_saving_a_tree_that_does_not_exist_yet_creates_it(monkeypatch):
+    """A second knowledge base always starts from nothing. The Contents
+    API creates a file when the PUT carries NO sha, so a 404 on the sha
+    lookup is the create case rather than a failure -- treating it as an
+    error made the DVW tree impossible to save the first time."""
+    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
+    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
+
+    captured = {}
+    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(404, {}))
+
+    def _fake_put(url, headers=None, json=None, timeout=None):
+        captured["payload"] = json
+        return _FakeResponse(201, {})
+
+    monkeypatch.setattr(store.requests, "put", _fake_put)
+
+    tree = KnowledgeTree()
+    tree.add_root()
+    store.save_committed_tree(tree, path="volley_kb_data.json", serializer=lambda t: {"nodes": []})
+
+    assert "sha" not in captured["payload"], "a create must not send a sha"
+    assert captured["payload"]["message"].startswith("Create")
+
+
+def test_saving_an_existing_tree_still_sends_its_sha(monkeypatch):
+    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
+    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
+
+    captured = {}
+    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(200, {"sha": "abc123"}))
+
+    def _fake_put(url, headers=None, json=None, timeout=None):
+        captured["payload"] = json
+        return _FakeResponse(200, {})
+
+    monkeypatch.setattr(store.requests, "put", _fake_put)
+
+    tree = KnowledgeTree()
+    tree.add_root()
+    store.save_committed_tree(tree, path="volley_kb_data.json", serializer=lambda t: {"nodes": []})
+
+    assert captured["payload"]["sha"] == "abc123"
+    assert captured["payload"]["message"].startswith("Update")
