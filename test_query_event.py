@@ -255,3 +255,97 @@ def test_add_node_rejects_an_invalid_event_spec():
     with pytest.raises(ValueError):
         tree.add_node(label="Bogus", kind=NodeKind.LEAF, parent_id=branches["Attack"],
                        to="staging", spec=bad)
+
+
+# ── the Set drill-down through the query layer ─────────────────
+
+class TestSetScoping:
+    """set_hint NARROWS the data; a pipeline naming the Set axis SPLITS
+    the cube by set. They are different things and they compose."""
+
+    @staticmethod
+    def _action(**overrides):
+        action = {"metric_of_interest": "Kills", "skill_group": None, "player": None,
+                  "game_hint": None, "set_hint": None, "title": "t", "pipeline": []}
+        action.update(overrides)
+        return {"actions": [action]}
+
+    def _run(self, tree, source, **overrides):
+        return execute_query_actions(self._action(**overrides), tree, source)[0]
+
+    def test_no_set_hint_summarises_every_set(self):
+        tree, _ = seed_dvw_tree(SOURCE.schema)
+        result = self._run(tree, SOURCE)
+        assert "Set" not in result["result_df"].columns, "the default stays a per-match summary"
+        assert result["set_hint"] is None and result["set_note"] is None
+
+    def test_set_hint_narrows_without_adding_a_set_column(self):
+        """Asking about one set is a filter, not a split: the answer is
+        still one row per player per match, just computed from less."""
+        tree, _ = seed_dvw_tree(SOURCE.schema)
+        everything = self._run(tree, SOURCE)["result_df"]
+        one_set = self._run(tree, SOURCE, set_hint="Set 1")["result_df"]
+
+        assert "Set" not in one_set.columns
+        assert one_set["Value"].sum() <= everything["Value"].sum(), (
+            "one set cannot contain more kills than the whole match"
+        )
+
+    def test_ranking_on_the_set_axis_splits_the_cube(self):
+        tree, _ = seed_dvw_tree(SOURCE.schema)
+        from fake_source import sample_set_source
+        source = sample_set_source()
+        tree, _ = seed_dvw_tree(source.schema)
+        result = self._run(tree, source, pipeline=[Rank(axis="Set", descending=True, limit=3)])
+        assert "Set" in result["result_df"].columns
+        assert not result["result_df"].empty
+
+
+class TestSetOnASourceThatHasNoSets:
+    """The refusal that matters: silently returning match totals for "in
+    set 3" is a wrong answer that looks like a right one."""
+
+    @staticmethod
+    def _measure_source():
+        import pandas as pd
+        from source_csv import CsvSource
+
+        frame = pd.DataFrame([
+            {"Name": "#7 Sloan T.", "Attack K": 12, "Sets Sets Played": 3},
+            {"Name": "#22 Azana S.", "Attack K": 8, "Sets Sets Played": 3},
+        ])
+        return CsvSource([("Game A", frame)])
+
+    @staticmethod
+    def _tree():
+        from recruiting_tree import KnowledgeTree, NodeKind, make_column_spec
+        tree = KnowledgeTree()
+        tree.add_root()
+        branch = tree.add_node(label="Attack", kind=NodeKind.BRANCH,
+                               parent_id=tree.root_id, to="committed")
+        tree.add_node(label="Kills", kind=NodeKind.LEAF, parent_id=branch, to="committed",
+                      spec=make_column_spec("Attack K"))
+        tree.seed_from_committed()
+        return tree
+
+    def test_a_set_hint_is_refused_by_name_and_the_answer_still_comes_back(self):
+        source, tree = self._measure_source(), self._tree()
+        result = execute_query_actions(
+            {"actions": [{"metric_of_interest": "Kills", "skill_group": None, "player": None,
+                          "game_hint": None, "set_hint": "Set 1", "title": "t", "pipeline": []}]},
+            tree, source,
+        )[0]
+        assert result["set_hint"] is None, "the filter must be dropped, not applied to nothing"
+        assert "can't be broken down by set" in result["set_note"]
+        assert not result["result_df"].empty, "the coach still gets the match totals"
+        assert "Set" not in result["result_df"].columns
+
+    def test_a_set_axis_operation_is_refused_the_same_way(self):
+        source, tree = self._measure_source(), self._tree()
+        result = execute_query_actions(
+            {"actions": [{"metric_of_interest": "Kills", "skill_group": None, "player": None,
+                          "game_hint": None, "set_hint": None, "title": "t",
+                          "pipeline": [Rank(axis="Set", descending=True, limit=3)]}]},
+            tree, source,
+        )[0]
+        assert result["set_note"] and "can't be broken down by set" in result["set_note"]

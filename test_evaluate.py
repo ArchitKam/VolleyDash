@@ -182,3 +182,80 @@ def test_a_source_without_a_set_column_does_not_offer_the_set_axis():
     # Asking anyway is a no-op, not a KeyError: a caller that forgets to
     # check gets a match-level answer.
     assert resolve_axes(source, ["Player", "Game", "Set"]) == ["Player", "Game"]
+
+
+# ── set scoping, hand-countable ────────────────────────────────
+
+class TestSetScopingArithmetic:
+    """sample_set_source(), one match:
+         Sloan  -- Set 1: 2 kills, Set 2: 1, Set 3: 3   (6 kills, 3 sets)
+         Kendal -- Set 1: 1 kill,  Set 3: 0             (1 kill,  2 sets)
+    Every number below is countable by hand from that."""
+
+    @staticmethod
+    def _tree_and_source():
+        from fake_source import sample_set_source
+        from seed_dvw import seed_dvw_tree
+
+        source = sample_set_source()
+        tree, _ = seed_dvw_tree(source.schema)
+        return tree, source
+
+    @staticmethod
+    def _leaf(tree, label):
+        return next(n for n in tree.committed.values()
+                    if n.kind == NodeKind.LEAF and n.label == label)
+
+    def _value(self, frame, player):
+        rows = frame[frame["Player"] == player]
+        assert len(rows) == 1, f"expected one row for {player}, got {len(rows)}"
+        return rows["Value"].iloc[0]
+
+    def test_unscoped_is_the_match_total(self):
+        tree, source = self._tree_and_source()
+        kills = evaluate_metric(self._leaf(tree, "Kills").spec, source, tree)
+        assert self._value(kills, "Sloan") == 6
+        assert self._value(kills, "Kendal") == 1
+
+    def test_unscoped_rate_divides_by_sets_actually_played(self):
+        """Kendal played 2 of the 3 sets, so her rate is 1/2, not 1/3."""
+        tree, source = self._tree_and_source()
+        rate = evaluate_metric(self._leaf(tree, "Kills Per Set").spec, source, tree)
+        assert self._value(rate, "Sloan") == 2.0    # 6 kills / 3 sets
+        assert self._value(rate, "Kendal") == 0.5   # 1 kill  / 2 sets
+
+    def test_scoping_to_a_set_rebases_the_denominator_to_that_set(self):
+        """The recorded decision: inside set 3, Sloan's "Kills Per Set"
+        is her 3 kills over the 1 set in scope -- not 3/3 = 1.0, which is
+        what keeping the match denominator would have given."""
+        from source import scope_source
+
+        tree, source = self._tree_and_source()
+        scoped = scope_source(source, {"Set": ["Set 3"]})
+
+        kills = evaluate_metric(self._leaf(tree, "Kills").spec, scoped, tree)
+        sets_played = evaluate_metric(self._leaf(tree, "Sets Played").spec, scoped, tree)
+        rate = evaluate_metric(self._leaf(tree, "Kills Per Set").spec, scoped, tree)
+
+        assert self._value(kills, "Sloan") == 3
+        assert self._value(sets_played, "Sloan") == 1
+        assert self._value(rate, "Sloan") == 3.0
+
+    def test_a_player_absent_from_the_scoped_set_is_absent_not_zero(self):
+        """Kendal did not play set 2. "No rows" and "zero kills" are
+        different statements and must not be conflated."""
+        from source import scope_source
+
+        tree, source = self._tree_and_source()
+        scoped = scope_source(source, {"Set": ["Set 2"]})
+        kills = evaluate_metric(self._leaf(tree, "Kills").spec, scoped, tree)
+        assert set(kills["Player"]) == {"Sloan"}
+
+    def test_splitting_by_set_refines_rather_than_changes_the_total(self):
+        tree, source = self._tree_and_source()
+        per_set = evaluate_metric(self._leaf(tree, "Kills").spec, source, tree,
+                                  axes=["Player", "Game", "Set"])
+        assert dict(zip(per_set["Set"], per_set["Value"]))  # non-empty
+        sloan = per_set[per_set["Player"] == "Sloan"].set_index("Set")["Value"].to_dict()
+        assert sloan == {"Set 1": 2.0, "Set 2": 1.0, "Set 3": 3.0}
+        assert per_set.groupby("Player")["Value"].sum().to_dict() == {"Sloan": 6.0, "Kendal": 1.0}

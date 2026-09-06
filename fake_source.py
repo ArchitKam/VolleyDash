@@ -101,3 +101,62 @@ def sample_source() -> FakeEventSource:
         ("Kendal", "Game A"): 3, ("Kendal", "Game B"): 4,
     }
     return FakeEventSource(rows, sets_played)
+
+
+SET_COLUMN = "set_label"
+
+
+class FakeSetSource(FakeEventSource):
+    """
+    A fake with the Set axis, so set scoping is unit-testable without the
+    real corpus.
+
+    Rows are (player, game, set, skill, evaluation_code), and sets played
+    is derived rather than passed in: at this grain it is exactly "one
+    row per (player, match, set) the player appeared in", which is the
+    same rule the real DVW source applies -- and deriving it here means
+    the fake cannot drift into asserting a shape the real source does not
+    produce.
+    """
+
+    def __init__(self, rows: List[tuple]):
+        self._frame = pd.DataFrame(
+            rows, columns=[PLAYER_COLUMN, GAME_COLUMN, SET_COLUMN, "skill", "evaluation_code"]
+        )
+        self._sets_played = {}
+
+    def identity_fields(self) -> Dict[str, str]:
+        return {"Player": PLAYER_COLUMN, "Game": GAME_COLUMN, "Set": SET_COLUMN}
+
+    def measures(self) -> pd.DataFrame:
+        appearances = self._frame[[PLAYER_COLUMN, GAME_COLUMN, SET_COLUMN]].drop_duplicates()
+        appearances = appearances.copy()
+        appearances["sets_played"] = 1
+        return appearances
+
+    @property
+    def schema(self) -> SourceSchema:
+        base = super().schema
+        fields = dict(base.fields)
+        fields[SET_COLUMN] = FieldSpec(SET_COLUMN, FieldRole.IDENTITY, "Set")
+        return SourceSchema(fields=fields, dependent_values=base.dependent_values)
+
+
+def sample_set_source() -> FakeSetSource:
+    """
+    One match, three sets, hand-countable per set.
+
+    Sloan  -- Set 1: 2 kills   Set 2: 1 kill    Set 3: 3 kills   (6 total, 3 sets)
+    Kendal -- Set 1: 1 kill    Set 3: 0 kills   (1 total, 2 sets; did not play set 2)
+    """
+    rows = [
+        ("Sloan", "Game A", "Set 1", "Attack", "#"),
+        ("Sloan", "Game A", "Set 1", "Attack", "#"),
+        ("Sloan", "Game A", "Set 2", "Attack", "#"),
+        ("Sloan", "Game A", "Set 3", "Attack", "#"),
+        ("Sloan", "Game A", "Set 3", "Attack", "#"),
+        ("Sloan", "Game A", "Set 3", "Attack", "#"),
+        ("Kendal", "Game A", "Set 1", "Attack", "#"),
+        ("Kendal", "Game A", "Set 3", "Attack", "="),
+    ]
+    return FakeSetSource(rows)

@@ -29,10 +29,8 @@ from recruiting_operations import Operation, Rank, Slice, run_pipeline
 from recruiting_tree import KnowledgeTree, Node, NodeKind
 
 from evaluate import evaluate_category, evaluate_metric
-from source import Source
+from source import GAME_AXIS, METRIC_AXIS, PLAYER_AXIS, SET_AXIS, Source, scope_source
 
-PLAYER_AXIS = "Player"
-GAME_AXIS = "Game"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -151,7 +149,8 @@ def _pipeline_referenced_metrics(pipeline: List[Operation]) -> Set[str]:
 
 def prepare_pipeline_frame(result_df: pd.DataFrame, pipeline: List[Operation],
                             primary_metric_label: Optional[str], tree: KnowledgeTree,
-                            source: Source) -> Tuple[pd.DataFrame, List[str]]:
+                            source: Source,
+                            axes: Optional[List[str]] = None) -> Tuple[pd.DataFrame, List[str]]:
     """
     Guarantees a Metric column, then fetches any EXTRA metric a
     cross-metric Slice predicate references so run_pipeline sees one
@@ -170,7 +169,10 @@ def prepare_pipeline_frame(result_df: pd.DataFrame, pipeline: List[Operation],
         if leaf is None or leaf.spec is None:
             notes.append(f"Pipeline referenced unknown metric '{extra_label}' -- skipped.")
             continue
-        extra = evaluate_metric(leaf.spec, source, tree)
+        # Same axes as the frame it is being concatenated onto: a
+        # predicate metric fetched at a different grain would not align,
+        # and pandas would happily concat the mismatch into NaNs.
+        extra = evaluate_metric(leaf.spec, source, tree, axes=axes)
         extra.insert(0, "Metric", extra_label)
         frames.append(extra)
 
@@ -251,10 +253,35 @@ def execute_query_actions(decomposition: Dict[str, Any], tree: KnowledgeTree, so
         else:
             action_games = selected_games
 
+        # ── set scoping and the Set axis ──────────────────────
+        # Two different things, and they compose. A set_hint NARROWS the
+        # data (and with it the per-set denominators, so a rate inside
+        # one set divides by that one set). A pipeline naming the Set
+        # axis asks for the cube to be SPLIT by set. Asking for set 3
+        # grouped by set is legal and yields one row per player.
+        supports_sets = SET_AXIS in source.identity_fields()
+        set_hint = action.get("set_hint")
+        set_note = None
+        wants_set_axis = any(getattr(op, "axis", None) == SET_AXIS for op in pipeline)
+
+        if not supports_sets and (set_hint or wants_set_axis):
+            # Refused by name rather than ignored: silently returning
+            # match totals for "in set 3" is a wrong answer that looks
+            # like a right one.
+            set_note = (
+                "This data has one row per player per match, so it can't be "
+                "broken down by set -- showing match totals instead."
+            )
+            set_hint, wants_set_axis = None, False
+
+        eval_source = scope_source(source, {SET_AXIS: [set_hint]}) if set_hint else source
+        axes = ([PLAYER_AXIS, GAME_AXIS, SET_AXIS] if (supports_sets and wants_set_axis)
+                else None)
+
         if is_category:
-            frame = evaluate_category(tree, branch_id, source)
+            frame = evaluate_category(tree, branch_id, eval_source, axes=axes)
         else:
-            frame = evaluate_metric(leaf.spec, source, tree)
+            frame = evaluate_metric(leaf.spec, eval_source, tree, axes=axes)
 
         # Game scoping is a frame filter here rather than a fetch-time
         # choice: the evaluator computes the whole cube in one vectorized
@@ -280,14 +307,15 @@ def execute_query_actions(decomposition: Dict[str, Any], tree: KnowledgeTree, so
                         pipeline.append(Slice(axis=PLAYER_AXIS, keep=[resolved_player]))
 
             has_metric_slice = any(
-                isinstance(op, Slice) and op.axis == "Metric" for op in pipeline
+                isinstance(op, Slice) and op.axis == METRIC_AXIS for op in pipeline
             )
             primary_metric = action.get("metric_of_interest")
             if not is_category and primary_metric and not has_metric_slice:
-                pipeline.append(Slice(axis="Metric", keep=[primary_metric]))
+                pipeline.append(Slice(axis=METRIC_AXIS, keep=[primary_metric]))
 
             combined, fetch_notes = prepare_pipeline_frame(
-                frame, pipeline, action.get("metric_of_interest"), tree, source,
+                frame, pipeline, action.get("metric_of_interest"), tree, eval_source,
+                axes=axes,
             )
             frame, run_notes = run_pipeline(combined, pipeline)
             pipeline_notes = fetch_notes + run_notes
@@ -296,7 +324,8 @@ def execute_query_actions(decomposition: Dict[str, Any], tree: KnowledgeTree, so
 
         results.append({
             "action": action, "is_category": is_category, "resolved_player": resolved_player,
-            "action_games": action_games, "game_note": game_note, "result_df": frame,
+            "action_games": action_games, "game_note": game_note,
+            "set_hint": set_hint, "set_note": set_note, "result_df": frame,
             "pipeline": pipeline, "pipeline_notes": pipeline_notes,
         })
 
