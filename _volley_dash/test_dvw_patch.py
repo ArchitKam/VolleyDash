@@ -21,10 +21,7 @@ import pytest
 import dvw_patch
 from dvw_patch import SET_COLUMNS, get_set
 
-DVW_DIRS = [
-    "/fs/vulcan-projects/vlm_motion_benchmark/VolleyballMetrics/player_analysis/downloads/dvw",
-    "/fs/vulcan-projects/vlm_motion_benchmark/VolleyballMetrics/player_analysis/dvw_downloads",
-]
+from volley_store import DVW_SEARCH_DIRS as DVW_DIRS
 
 
 def upstream_get_set(rows_list):

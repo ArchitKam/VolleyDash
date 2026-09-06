@@ -35,12 +35,27 @@ from volley_source import SourceSchema
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TREE_PATH = os.path.join(PACKAGE_DIR, "volley_kb_data.json")
 
-# Where the .dvw files live. Overridable so this is not welded to one
-# machine's layout; the default is this project's own corpus.
+# Where the .dvw files live. This is the ONLY place a corpus path is
+# written down -- the match files themselves live outside this repo
+# (see .gitignore), so nothing here should be welded to one machine's
+# layout. Both are overridable by environment variable.
+#
+# The app loads exactly ONE directory (discover_matches is deliberately
+# non-recursive: sibling folders hold duplicate copies of three matches,
+# and loading both would double every count). The parser tests decode
+# every file in every directory, duplicates included, because there the
+# unit is the file rather than the match.
 DEFAULT_DVW_DIR = os.environ.get(
     "VOLLEY_DVW_DIR",
     "/fs/vulcan-projects/vlm_motion_benchmark/VolleyballMetrics/player_analysis/downloads/dvw",
 )
+
+DVW_SEARCH_DIRS = [
+    path for path in os.environ.get("VOLLEY_DVW_DIRS", "").split(os.pathsep) if path
+] or [
+    DEFAULT_DVW_DIR,
+    "/fs/vulcan-projects/vlm_motion_benchmark/VolleyballMetrics/player_analysis/dvw_downloads",
+]
 
 
 def _spec_to_dict(spec) -> dict:

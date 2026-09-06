@@ -20,16 +20,17 @@ from volley_source_dvw import (
     DvwSource, MatchInfo, discover_matches, format_match_day, player_label, shorten_team_name,
 )
 
-DVW_DIR = "/fs/vulcan-projects/vlm_motion_benchmark/VolleyballMetrics/player_analysis/downloads/dvw"
+from volley_store import DEFAULT_DVW_DIR as DVW_DIR
 
 
 # ── labels ─────────────────────────────────────────────────────
 
 def test_player_label_includes_the_jersey_number():
-    """Maryland's roster carries "Eva Rohrbach" at both #17 and #44, so
-    the name alone is not an identity."""
-    assert player_label("44", "Eva Rohrbach") == "#44 Eva Rohrbach"
-    assert player_label("17", "Eva Rohrbach") != player_label("44", "Eva Rohrbach")
+    """A roster in this corpus carries the SAME name at two different
+    numbers, so the name alone is not an identity. Names here are
+    stand-ins -- the real roster is data and stays out of this repo."""
+    assert player_label("44", "Sample Player") == "#44 Sample Player"
+    assert player_label("17", "Sample Player") != player_label("44", "Sample Player")
 
 
 def test_player_label_is_empty_for_a_row_with_no_player():
@@ -43,10 +44,11 @@ def test_player_label_is_empty_for_a_row_with_no_player():
 
 
 def test_player_label_keeps_real_names_containing_nan():
-    """Guards the fix above from over-reaching: "Dignan" and
-    "Hernandez" contain the substring "nan"."""
-    assert player_label("7", "Lauren Dignan") == "#7 Lauren Dignan"
-    assert player_label("8", "Averie Hernandez") == "#8 Averie Hernandez"
+    """Guards the fix above from over-reaching. Two surnames in this
+    corpus contain the substring "nan", so a substring test for "nan"
+    would erase real players; only the exact token may count."""
+    assert player_label("7", "Robin Brennan") == "#7 Robin Brennan"
+    assert player_label("8", "Sam Fernandez") == "#8 Sam Fernandez"
 
 
 def test_shorten_team_name_handles_the_real_forms_in_this_corpus():

@@ -19,12 +19,13 @@ reader can re-check rather than trust.
 ────────────────────────────────────────────────────────────────
 
 PLAYER IDENTITY INCLUDES THE JERSEY NUMBER.
-  Maryland's roster carries "Eva Rohrbach" at BOTH #17 and #44 in the
-  same match. Keying a player by name alone silently merges two
-  different roster entries (one of whom played 5 sets and one 0), so
-  the label is "#44 Eva Rohrbach". This also matches the existing CSV
-  world's "#7 Sloan T." convention, so the router's player resolution
-  (which strips a leading #token) works unchanged against both.
+  One roster here carries the SAME name at BOTH #17 and #44 in the same
+  match. Keying a player by name alone silently merges two different
+  roster entries (one of whom played 5 sets and one 0), so the label is
+  "#44 <name>". This also matches the CSV world's "#7 <name>"
+  convention, so the router's player resolution (which strips a leading
+  #token) works unchanged against both. Real names are data and live
+  in the match files, which stay out of this repo.
 
 GAME IDENTITY INCLUDES THE DATE.
   Maryland plays Penn State, Indiana and Rutgers TWICE each in this
