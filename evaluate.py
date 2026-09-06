@@ -40,7 +40,8 @@ import pandas as pd
 from recruiting_tree import KnowledgeTree, MetricSpec, NodeKind
 
 from event_spec import COUNT, COUNT_DISTINCT
-from source import GAME_AXIS, PLAYER_AXIS, SET_AXIS, Source
+from evaluate_csv import compute_for_all_players
+from source import GAME_AXIS, PLAYER_AXIS, SET_AXIS, Grain, Source
 
 TOKEN_PATTERN = re.compile(r"\[([^\[\]]+)\]")
 
@@ -316,6 +317,55 @@ def evaluate_metric(spec: MetricSpec, source: Source, tree: KnowledgeTree,
                      player: Optional[str] = None,
                      axes: Optional[Sequence[str]] = None) -> pd.DataFrame:
     """
+    One metric against any source, as the cube's tidy long form.
+
+    Dispatches on GRAIN, because the two grains disagree about what a
+    blank value and a division by zero mean and the CSV answers are what
+    a coach already reads in the recruiting app (evaluate_csv.py's
+    docstring). The shared boundary is this function's OUTPUT -- columns
+    Game / Player / [Set] / Value / Note -- not the arithmetic behind it.
+    """
+    if source.grain is Grain.MEASURE:
+        return _evaluate_metric_measure(spec, source, tree, player=player)
+    return _evaluate_metric_event(spec, source, tree, player=player, axes=axes)
+
+
+def _evaluate_metric_measure(spec: MetricSpec, source: Source, tree: KnowledgeTree,
+                              player: Optional[str] = None) -> pd.DataFrame:
+    """
+    MEASURE grain: one row per player per match already, so the spec is
+    evaluated against each row rather than aggregated onto an index.
+
+    This is run_metric_query from app.py, moved rather than rewritten --
+    same functions, same order, same Note text -- so the recruiting
+    numbers and the recruiting error messages are the ones that were
+    there before unification.
+
+    `axes` is not accepted: there is no finer grain to ask for. A caller
+    that requests Set gets match totals via resolve_axes, which is the
+    same answer this would give and one fewer way to be surprised.
+    """
+    frames = getattr(source, "frames", None)
+    if frames is None:
+        raise MetricEvaluationError("A measure-grain source must expose frames().")
+
+    records = []
+    for game, frame in frames():
+        label = str(getattr(game, "opponent", game))
+        for name, result in compute_for_all_players(spec, frame, tree=tree):
+            if player is not None and name != player:
+                continue
+            records.append({
+                GAME_AXIS: label, PLAYER_AXIS: name,
+                "Value": result.value, "Note": result.error or "",
+            })
+    return pd.DataFrame(records, columns=OUTPUT_COLUMNS)
+
+
+def _evaluate_metric_event(spec: MetricSpec, source: Source, tree: KnowledgeTree,
+                            player: Optional[str] = None,
+                            axes: Optional[Sequence[str]] = None) -> pd.DataFrame:
+    """
     Evaluate one metric into the cube's tidy long form.
 
     Returns columns Game / Player / [Set] / Value / Note -- the Set
@@ -364,7 +414,10 @@ def evaluate_category(tree: KnowledgeTree, branch_node_id: str, source: Source,
     event-grain twin of run_category_query, and the reason a skill_group
     question returns one block per metric rather than one number.
     """
-    columns = ["Metric"] + output_columns(resolve_axes(source, axes))
+    columns = ["Metric"] + (
+        OUTPUT_COLUMNS if source.grain is Grain.MEASURE
+        else output_columns(resolve_axes(source, axes))
+    )
     branch = tree.committed.get(branch_node_id)
     if branch is None or branch.kind != NodeKind.BRANCH:
         return pd.DataFrame(columns=columns)
@@ -375,6 +428,8 @@ def evaluate_category(tree: KnowledgeTree, branch_node_id: str, source: Source,
         if not leaf or leaf.kind != NodeKind.LEAF or not leaf.spec:
             continue
         leaf_frame = evaluate_metric(leaf.spec, source, tree, player=player, axes=axes)
+        if leaf_frame.empty and not list(leaf_frame.columns):
+            continue
         leaf_frame.insert(0, "Metric", leaf.label)
         frames.append(leaf_frame)
 
