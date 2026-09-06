@@ -93,6 +93,7 @@ from source import FieldRole, FieldSpec, Grain, Source, SourceSchema
 
 PLAYER_COLUMN = "player_label"
 GAME_COLUMN = "match_label"
+SET_COLUMN = "set_label"
 TEAM_COLUMN = "team"
 
 # Per-set participation columns in the [3PLAYERS-*] metadata. A blank
@@ -104,7 +105,7 @@ PARTICIPATION_COLUMNS = ["set1", "set2", "set3", "set4", "set5"]
 # be entirely empty in the loaded matches is dropped from the schema
 # rather than advertised as filterable-but-useless.
 CANDIDATE_DIMENSIONS = [
-    "skill", "evaluation_code", "set_number", "point_phase", "attack_phase",
+    "skill", "evaluation_code", "point_phase", "attack_phase",
     "set_type", "attack_code", "start_zone", "end_zone", "end_subzone",
     "num_players_numeric", "setter_position",
 ]
@@ -174,8 +175,8 @@ def _clean_token(value: Optional[object]) -> str:
 
 def player_label(number: Optional[object], name: Optional[object]) -> str:
     """
-    "#44 Eva Rohrbach" -- jersey number included because names are NOT
-    unique on a real roster (see module docstring).
+    "#44 <name>" -- jersey number included because names are NOT unique
+    on a real roster (see module docstring).
 
     Returns "" when the row identifies no player, which is how the
     rally-outcome rows get excluded: every skill="Point" row (a
@@ -190,6 +191,35 @@ def player_label(number: Optional[object], name: Optional[object]) -> str:
     if number and name:
         return f"#{number} {name}"
     return name or (f"#{number}" if number else "")
+
+
+def set_label(number: Optional[object]) -> str:
+    """
+    "Set 3". A label rather than the bare integer because this is an
+    identity value on a cube axis, and the axis is displayed: bare 1..5
+    reads as a count next to a column of counts.
+
+    Returns "" for a row with no identifiable set, which the caller
+    drops for the same reason it drops a row with no identifiable
+    player -- it cannot be attributed, and keeping it would inflate
+    whichever bucket pandas grouped the blank into.
+    """
+    token = _clean_token(number)
+    if not token:
+        return ""
+    try:
+        return f"Set {int(float(token))}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def set_sort_key(label: str) -> tuple:
+    """Orders "Set 10" after "Set 9" rather than between "Set 1" and
+    "Set 2", which is what sorting the strings would do."""
+    try:
+        return (0, int(label.split()[-1]))
+    except (ValueError, IndexError):
+        return (1, 0)
 
 
 class MatchInfo:
@@ -293,7 +323,9 @@ class DvwSource(Source):
         return self._schema
 
     def identity_fields(self) -> Dict[str, str]:
-        return {"Player": PLAYER_COLUMN, "Game": GAME_COLUMN}
+        """Set is an identity axis here and absent for the CSV source --
+        that difference is the whole reason axes() asks the source."""
+        return {"Player": PLAYER_COLUMN, "Game": GAME_COLUMN, "Set": SET_COLUMN}
 
     def facts(self) -> pd.DataFrame:
         if self._facts is None:
@@ -352,6 +384,7 @@ class DvwSource(Source):
                 for n, nm in zip(actions["player_number"], actions["player_name"])
             ]
             actions[GAME_COLUMN] = info.label
+            actions[SET_COLUMN] = [set_label(n) for n in actions["set_number"]]
             # A row with no identifiable player cannot be attributed to
             # anyone; keeping it would inflate whichever bucket pandas
             # grouped the blank label into.
@@ -371,16 +404,28 @@ class DvwSource(Source):
     def _sets_played_frame(self, roster: pd.DataFrame, info: MatchInfo,
                             sets_contested: int) -> pd.DataFrame:
         """
-        Sets played per player for one match, from the roster metadata's
-        per-set participation entries -- the only one of the three
-        available methods that is correct for liberos (module docstring).
+        Sets played for one match, reported PER SET: one row per
+        (player, match, set) the player was actually on court for, with
+        sets_played = 1.
 
-        Only the first `sets_contested` participation columns are read:
-        a lineup entered for a set that was never played still sits in
-        the file and would otherwise be counted as a set played.
+        Reported at the finest grain the data supports rather than
+        pre-summed to the match, because the coarser answer is
+        recoverable from this one (sum over Set) and the finer one is
+        not recoverable from the coarser. That is what makes a per-set
+        rate correct when a set is selected: "Kills Per Set" in set 3
+        divides by the 1 set she played in that slice, not by the 4 she
+        played in the match.
+
+        Source of truth is the roster metadata's per-set participation
+        entries -- the only one of the three available methods that is
+        correct for liberos (module docstring). Only the first
+        `sets_contested` participation columns are read: a lineup
+        entered for a set that was never played still sits in the file
+        and would otherwise be counted as a set played.
         """
+        columns = [PLAYER_COLUMN, GAME_COLUMN, SET_COLUMN, "sets_played"]
         if roster.empty:
-            return pd.DataFrame(columns=[PLAYER_COLUMN, GAME_COLUMN, "sets_played"])
+            return pd.DataFrame(columns=columns)
 
         rows = roster
         if self.team_of_interest is not None:
@@ -390,19 +435,21 @@ class DvwSource(Source):
 
         records = []
         for _, entry in rows.iterrows():
-            played = sum(
-                1 for column in countable
-                if column in entry.index and str(entry[column]).strip() not in ("", "nan", "None")
-            )
             label = player_label(entry.get("player_number"), entry.get("player_name"))
             if not label.strip():
                 continue
-            records.append({
-                PLAYER_COLUMN: label,
-                GAME_COLUMN: info.label,
-                "sets_played": played,
-            })
-        return pd.DataFrame(records, columns=[PLAYER_COLUMN, GAME_COLUMN, "sets_played"])
+            for offset, column in enumerate(countable, start=1):
+                if column not in entry.index:
+                    continue
+                if str(entry[column]).strip() in ("", "nan", "None"):
+                    continue
+                records.append({
+                    PLAYER_COLUMN: label,
+                    GAME_COLUMN: info.label,
+                    SET_COLUMN: set_label(offset),
+                    "sets_played": 1,
+                })
+        return pd.DataFrame(records, columns=columns)
 
     # ── schema derivation ─────────────────────────────────────
 

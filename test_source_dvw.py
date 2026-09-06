@@ -100,7 +100,44 @@ def test_discover_matches_is_not_recursive():
 @requires_corpus
 def test_grain_and_identity(maryland_source):
     assert maryland_source.grain is Grain.EVENT
-    assert maryland_source.identity_fields() == {"Player": "player_label", "Game": "match_label"}
+    assert maryland_source.identity_fields() == {
+        "Player": "player_label", "Game": "match_label", "Set": "set_label",
+    }
+
+
+@requires_corpus
+def test_dvw_offers_the_set_axis(maryland_source):
+    """Event grain can see individual sets, so it advertises the axis;
+    the CSV source cannot and does not (test_evaluate.py)."""
+    assert maryland_source.axes() == ["Player", "Game", "Set", "Metric"]
+
+
+@requires_corpus
+def test_every_fact_carries_a_real_set_label(maryland_source):
+    """get_plays() emits a trailing pseudo-set beyond the sets actually
+    played; action rows must never carry it, or the UI would offer a
+    set 4 in a 3-0 sweep."""
+    labels = set(maryland_source.facts()["set_label"])
+    assert labels and "" not in labels
+    assert labels <= {"Set 1", "Set 2", "Set 3", "Set 4", "Set 5"}
+
+
+@requires_corpus
+def test_sets_played_is_reported_per_set_and_sums_to_the_match(maryland_source):
+    """The per-set frame must be an exact refinement of the per-match
+    answer that preceded it -- same totals, more detail -- or every
+    existing per-set rate silently changes."""
+    measures = maryland_source.measures()
+    assert set(measures["sets_played"]) == {1}, "one row per set actually played"
+
+    per_match = measures.groupby(["player_label", "match_label"])["sets_played"].sum()
+    assert per_match.max() <= 5
+    assert (per_match > 0).all()
+
+    # A player's set labels within a match must be distinct: counting the
+    # same set twice is the failure mode this replaces.
+    counted = measures.groupby(["player_label", "match_label"])["set_label"].nunique()
+    assert (counted == per_match).all()
 
 
 @requires_corpus
@@ -160,3 +197,78 @@ def test_sets_played_covers_every_player_who_recorded_an_action(maryland_source)
 def test_match_labels_are_unique(maryland_source):
     labels = [m.label for m in maryland_source.matches()]
     assert len(labels) == len(set(labels)), "opponent+date must identify a match"
+
+
+# ── the Set axis, end to end ───────────────────────────────────
+
+@requires_corpus
+def test_per_set_split_sums_back_to_the_match_total(maryland_source):
+    """Splitting by Set must be a REFINEMENT: the same kills, shown in
+    more detail. If these disagree the Set axis is inventing or losing
+    actions."""
+    from evaluate import evaluate_metric
+    from seed_dvw import seed_dvw_tree
+    from recruiting_tree import NodeKind
+
+    tree, _ = seed_dvw_tree(maryland_source.schema)
+    kills = next(n for n in tree.committed.values()
+                 if n.kind == NodeKind.LEAF and n.label == "Kills")
+
+    per_match = evaluate_metric(kills.spec, maryland_source, tree)
+    per_set = evaluate_metric(kills.spec, maryland_source, tree,
+                              axes=["Player", "Game", "Set"])
+    assert list(per_set.columns) == ["Game", "Player", "Set", "Value", "Note"]
+
+    rolled = per_set.groupby(["Game", "Player"])["Value"].sum().sort_index()
+    expected = per_match.set_index(["Game", "Player"])["Value"].sort_index()
+    pd.testing.assert_series_equal(rolled, expected, check_names=False)
+
+
+@requires_corpus
+def test_scoping_to_one_set_rebases_the_per_set_denominator(maryland_source):
+    """The decision recorded for a selected set: Sets Played becomes the
+    sets played WITHIN the slice, so "Kills Per Set" in set 1 is her
+    kills in set 1 rather than her kills in set 1 spread over the whole
+    match."""
+    from evaluate import evaluate_metric
+    from seed_dvw import seed_dvw_tree
+    from source import scope_source
+    from recruiting_tree import NodeKind
+
+    tree, _ = seed_dvw_tree(maryland_source.schema)
+    leaves = {n.label: n for n in tree.committed.values() if n.kind == NodeKind.LEAF}
+    scoped = scope_source(maryland_source, {"Set": ["Set 1"]})
+
+    sets_played = evaluate_metric(leaves["Sets Played"].spec, scoped, tree)
+    assert set(sets_played["Value"].dropna()) <= {0.0, 1.0}, "one set in scope is at most one set played"
+
+    kills = evaluate_metric(leaves["Kills"].spec, scoped, tree)
+    rate = evaluate_metric(leaves["Kills Per Set"].spec, scoped, tree)
+    merged = kills.merge(rate, on=["Game", "Player"], suffixes=("_kills", "_rate"))
+    merged = merged.merge(sets_played.rename(columns={"Value": "sets"}), on=["Game", "Player"])
+
+    played = merged[merged["sets"] == 1]
+    assert not played.empty
+    pd.testing.assert_series_equal(
+        played["Value_rate"], played["Value_kills"], check_names=False,
+    )
+
+
+@requires_corpus
+def test_scoping_to_a_set_does_not_change_the_unscoped_answer(maryland_source):
+    """Guards against the wrapper mutating the source it wraps -- the
+    filtered view and the original are used side by side in one
+    session."""
+    from evaluate import evaluate_metric
+    from seed_dvw import seed_dvw_tree
+    from source import scope_source
+    from recruiting_tree import NodeKind
+
+    tree, _ = seed_dvw_tree(maryland_source.schema)
+    kills = next(n for n in tree.committed.values()
+                 if n.kind == NodeKind.LEAF and n.label == "Kills")
+
+    before = evaluate_metric(kills.spec, maryland_source, tree)
+    evaluate_metric(kills.spec, scope_source(maryland_source, {"Set": ["Set 2"]}), tree)
+    after = evaluate_metric(kills.spec, maryland_source, tree)
+    pd.testing.assert_frame_equal(before, after)

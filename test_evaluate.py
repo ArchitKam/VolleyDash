@@ -167,3 +167,18 @@ def test_category_returns_every_metric_in_the_branch():
     assert set(frame["Metric"]) == {"Kills", "Attack Errors", "Attack Attempts",
                                     "Kills Per Set", "Hitting Efficiency"}
     assert list(frame.columns) == ["Metric", "Game", "Player", "Value", "Note"]
+
+
+# ── a source without sets ──────────────────────────────────────
+
+def test_a_source_without_a_set_column_does_not_offer_the_set_axis():
+    """The CSV grain throws set detail away before the file is written,
+    so the axis must be absent rather than present-and-empty."""
+    from evaluate import resolve_axes
+
+    source = sample_source()
+    assert "Set" not in source.identity_fields()
+    assert source.axes() == ["Player", "Game", "Metric"]
+    # Asking anyway is a no-op, not a KeyError: a caller that forgets to
+    # check gets a match-level answer.
+    assert resolve_axes(source, ["Player", "Game", "Set"]) == ["Player", "Game"]

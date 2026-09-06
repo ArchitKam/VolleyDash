@@ -33,20 +33,31 @@ and directly testable.
 
 import ast
 import re
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Sequence
 
 import pandas as pd
 
 from recruiting_tree import KnowledgeTree, MetricSpec, NodeKind
 
 from event_spec import COUNT, COUNT_DISTINCT
-from source import Source
+from source import GAME_AXIS, PLAYER_AXIS, SET_AXIS, Source
 
 TOKEN_PATTERN = re.compile(r"\[([^\[\]]+)\]")
 
-PLAYER_AXIS = "Player"
-GAME_AXIS = "Game"
+#: The grain every evaluation uses unless a caller asks for more. Set is
+#: opt-in, so an unfiltered question stays a per-match summary exactly as
+#: it was before the Set axis existed.
+DEFAULT_AXES = (PLAYER_AXIS, GAME_AXIS)
+
 OUTPUT_COLUMNS = [GAME_AXIS, PLAYER_AXIS, "Value", "Note"]
+
+
+def output_columns(axes: List[str]) -> List[str]:
+    """Tidy column order for a given grain: Game, Player, [Set], Value,
+    Note. Set sits after the identities it subdivides so a table reads
+    coarse-to-fine left to right."""
+    ordered = [axis for axis in (GAME_AXIS, PLAYER_AXIS, SET_AXIS) if axis in axes]
+    return ordered + ["Value", "Note"]
 
 # Only arithmetic. Same closed node set as the CSV evaluator's
 # safe_eval_arithmetic, for the same reason: a formula is authored by a
@@ -72,35 +83,53 @@ def referenced_metrics(spec: MetricSpec) -> List[str]:
     return TOKEN_PATTERN.findall(spec.payload.get("formula_expr", ""))
 
 
-def _identity_columns(source: Source) -> Tuple[str, str]:
-    identity = source.identity_fields()
-    return identity[PLAYER_AXIS], identity[GAME_AXIS]
-
-
-def universe_index(source: Source) -> pd.MultiIndex:
+def resolve_axes(source: Source, axes: Optional[Sequence[str]] = None) -> List[str]:
     """
-    Every (Player, Game) pair that should have a value at all.
+    The identity axes an evaluation will actually group by.
+
+    Filtered against what the source offers, so asking for Set on a
+    source that has no Set column is a no-op rather than a KeyError --
+    the CSV source genuinely cannot answer per-set questions, and a
+    caller that forgets to check should get a match-level answer, not a
+    crash.
+    """
+    available = source.identity_fields()
+    requested = list(axes) if axes else list(DEFAULT_AXES)
+    return [axis for axis in requested if axis in available]
+
+
+def _identity_columns(source: Source, axes: Sequence[str]) -> List[str]:
+    identity = source.identity_fields()
+    return [identity[axis] for axis in axes]
+
+
+def universe_index(source: Source, axes: Optional[Sequence[str]] = None) -> pd.MultiIndex:
+    """
+    Every identity tuple that should have a value at all, at the
+    requested grain.
 
     Roster participation first (so a player who was on court but never
     touched the ball still appears, with 0 rather than nothing), plus
-    any pair that has actions, so a source with no measures() still
+    any tuple that has actions, so a source with no measures() still
     works.
     """
-    player_column, game_column = _identity_columns(source)
-    pairs = set()
+    axes = resolve_axes(source, axes)
+    columns = _identity_columns(source, axes)
+    tuples = set()
 
     measures = source.measures()
     if not measures.empty and "sets_played" in measures.columns:
         played = measures[measures["sets_played"] > 0]
-        pairs.update(zip(played[player_column], played[game_column]))
+        if all(column in played.columns for column in columns):
+            tuples.update(zip(*(played[column] for column in columns)))
 
     facts = source.facts()
-    if not facts.empty:
-        pairs.update(zip(facts[player_column], facts[game_column]))
+    if not facts.empty and all(column in facts.columns for column in columns):
+        tuples.update(zip(*(facts[column] for column in columns)))
 
-    if not pairs:
-        return pd.MultiIndex.from_tuples([], names=[PLAYER_AXIS, GAME_AXIS])
-    return pd.MultiIndex.from_tuples(sorted(pairs), names=[PLAYER_AXIS, GAME_AXIS])
+    if not tuples:
+        return pd.MultiIndex.from_tuples([], names=list(axes))
+    return pd.MultiIndex.from_tuples(sorted(tuples), names=list(axes))
 
 
 def _event_mask(facts: pd.DataFrame, where: Dict[str, object]) -> pd.Series:
@@ -121,7 +150,7 @@ def _event_mask(facts: pd.DataFrame, where: Dict[str, object]) -> pd.Series:
 
 def _evaluate_event(spec: MetricSpec, source: Source, index: pd.MultiIndex) -> pd.Series:
     facts = source.facts()
-    player_column, game_column = _identity_columns(source)
+    columns = _identity_columns(source, list(index.names))
     if facts.empty:
         return pd.Series(0.0, index=index)
 
@@ -131,26 +160,40 @@ def _evaluate_event(spec: MetricSpec, source: Source, index: pd.MultiIndex) -> p
     if matching.empty:
         counts = pd.Series(dtype="float64")
     elif aggregate == COUNT_DISTINCT:
-        counts = matching.groupby([player_column, game_column])[spec.payload["field"]].nunique()
+        counts = matching.groupby(columns)[spec.payload["field"]].nunique()
     else:
-        counts = matching.groupby([player_column, game_column]).size()
+        counts = matching.groupby(columns).size()
 
-    counts.index = counts.index.set_names([PLAYER_AXIS, GAME_AXIS])
+    counts.index = counts.index.set_names(list(index.names))
     # 0, not NaN: everyone in the universe played, so "no matching
     # action" is a real zero.
     return counts.reindex(index).fillna(0).astype("float64")
 
 
 def _evaluate_measure(spec: MetricSpec, source: Source, index: pd.MultiIndex) -> pd.Series:
+    """
+    A measure is reported by the source at ITS finest grain, which may
+    be finer than the cube being built -- sets played is per set, but a
+    question with no set filter wants it per match. Combining is the
+    source's call (measure_aggregation), not an assumption here: summing
+    a percentage would be silently wrong.
+
+    Grouping rather than set_index also removes the old need to drop
+    duplicate index entries, which at a coarser grain were not
+    duplicates at all but the very rows that need adding up.
+    """
     measures = source.measures()
     name = spec.payload.get("measure")
     if measures.empty or name not in measures.columns:
         return pd.Series(float("nan"), index=index)
 
-    player_column, game_column = _identity_columns(source)
-    series = measures.set_index([player_column, game_column])[name]
-    series = series[~series.index.duplicated(keep="first")]
-    series.index = series.index.set_names([PLAYER_AXIS, GAME_AXIS])
+    columns = _identity_columns(source, list(index.names))
+    if not all(column in measures.columns for column in columns):
+        return pd.Series(float("nan"), index=index)
+
+    how = source.measure_aggregation(name)
+    series = measures.groupby(columns)[name].agg(how)
+    series.index = series.index.set_names(list(index.names))
     return series.reindex(index).astype("float64")
 
 
@@ -270,23 +313,33 @@ def _evaluate_series(spec: MetricSpec, source: Source, tree: KnowledgeTree,
 
 
 def evaluate_metric(spec: MetricSpec, source: Source, tree: KnowledgeTree,
-                     player: Optional[str] = None) -> pd.DataFrame:
+                     player: Optional[str] = None,
+                     axes: Optional[Sequence[str]] = None) -> pd.DataFrame:
     """
     Evaluate one metric into the cube's tidy long form.
 
-    Returns columns Game / Player / Value / Note -- byte-compatible with
-    what run_metric_query produces for the CSV path, so a caller can
+    Returns columns Game / Player / [Set] / Value / Note -- the Set
+    column only when `axes` asks for it, so the default output stays
+    byte-compatible with what the CSV path produces and a caller can
     hand the result straight to run_pipeline / tidy_data / the chart
     encoder.
 
-    A spec that cannot be evaluated at all comes back as an EMPTY frame
-    with the failure in Note on every row it would have had, rather than
+    To scope an evaluation to particular sets WITHOUT splitting by set,
+    narrow the source (source.scope_source) and leave `axes` alone: the
+    denominators narrow with it, which is what makes a per-set rate
+    correct inside a single set.
+
+    A spec that cannot be evaluated at all comes back as a frame with
+    the failure in Note on every row it would have had, rather than
     raising: one broken metric in a category should not take down the
     other eleven.
     """
-    index = universe_index(source)
+    resolved = resolve_axes(source, axes)
+    columns = output_columns(resolved)
+
+    index = universe_index(source, resolved)
     if len(index) == 0:
-        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+        return pd.DataFrame(columns=columns)
 
     try:
         series = _evaluate_series(spec, source, tree, index, frozenset())
@@ -297,20 +350,21 @@ def evaluate_metric(spec: MetricSpec, source: Source, tree: KnowledgeTree,
 
     frame = series.rename("Value").reset_index()
     frame["Note"] = note
-    frame = frame[OUTPUT_COLUMNS]
+    frame = frame[columns]
     if player is not None:
         frame = frame[frame[PLAYER_AXIS] == player]
     return frame.reset_index(drop=True)
 
 
 def evaluate_category(tree: KnowledgeTree, branch_node_id: str, source: Source,
-                       player: Optional[str] = None) -> pd.DataFrame:
+                       player: Optional[str] = None,
+                       axes: Optional[Sequence[str]] = None) -> pd.DataFrame:
     """
     Every metric under one branch, stacked with a Metric column -- the
     event-grain twin of run_category_query, and the reason a skill_group
     question returns one block per metric rather than one number.
     """
-    columns = ["Metric"] + OUTPUT_COLUMNS
+    columns = ["Metric"] + output_columns(resolve_axes(source, axes))
     branch = tree.committed.get(branch_node_id)
     if branch is None or branch.kind != NodeKind.BRANCH:
         return pd.DataFrame(columns=columns)
@@ -320,7 +374,7 @@ def evaluate_category(tree: KnowledgeTree, branch_node_id: str, source: Source,
         leaf = tree.committed.get(leaf_id)
         if not leaf or leaf.kind != NodeKind.LEAF or not leaf.spec:
             continue
-        leaf_frame = evaluate_metric(leaf.spec, source, tree, player=player)
+        leaf_frame = evaluate_metric(leaf.spec, source, tree, player=player, axes=axes)
         leaf_frame.insert(0, "Metric", leaf.label)
         frames.append(leaf_frame)
 

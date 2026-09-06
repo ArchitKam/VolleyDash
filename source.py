@@ -144,6 +144,20 @@ class SourceSchema:
         return table.get(governing_value)
 
 
+# The cube's axis names. Player, Game and Metric exist for every source;
+# Set exists only where the source can see individual sets, which is why
+# axes() is asked of the source rather than hard-coded anywhere above.
+PLAYER_AXIS = "Player"
+GAME_AXIS = "Game"
+SET_AXIS = "Set"
+METRIC_AXIS = "Metric"
+
+#: Identity axes in the order they nest, coarsest grouping first. Metric
+#: is not here: it is an axis of the cube but never an identity column of
+#: a fact row.
+IDENTITY_AXES = (PLAYER_AXIS, GAME_AXIS, SET_AXIS)
+
+
 class Source(ABC):
     """
     One input format, adapted. Implementations live in
@@ -181,9 +195,41 @@ class Source(ABC):
         serve both grains.
         """
 
+    def axes(self) -> List[str]:
+        """
+        The cube axes this source supports, in display order.
+
+        Derived from identity_fields() rather than declared separately,
+        so a source cannot claim an axis it has no column for: a source
+        that can see individual sets says so by having a Set identity
+        field, and one that cannot simply does not. Metric is appended
+        because every source has metrics.
+
+        This is what keeps "Set" out of the recruiting UI entirely
+        instead of showing an axis that would silently return nothing --
+        a Huddle CSV row is a player's totals for a whole match, so the
+        set detail was thrown away before the file was written.
+        """
+        identity = self.identity_fields()
+        return [axis for axis in IDENTITY_AXES if axis in identity] + [METRIC_AXIS]
+
+    def measure_aggregation(self, name: str) -> str:
+        """
+        How a measure combines when the cube is COARSER than the grain
+        measures() reports at -- e.g. sets played is reported per set but
+        asked for per match, where the answer is the sum.
+
+        "sum" is the right default for anything counted. A source with a
+        measure that must average instead (a percentage, a rating)
+        overrides this; getting it wrong would be a silent arithmetic
+        error, so it is an explicit part of the contract rather than an
+        assumption baked into the evaluator.
+        """
+        return "sum"
+
     def measures(self) -> pd.DataFrame:
         """
-        Per-(Player, Game) quantities that are NOT derivable by counting
+        Per-identity quantities that are NOT derivable by counting
         facts() rows -- for DataVolley, sets played, which is recorded in
         the match's roster metadata and cannot be reconstructed from
         action rows without undercounting anyone who was on court but
@@ -211,3 +257,69 @@ class Source(ABC):
         if facts.empty or game_column not in facts.columns:
             return []
         return sorted(facts[game_column].dropna().unique())
+
+
+class ScopedSource(Source):
+    """
+    A read-only view of another Source restricted to some identity
+    values -- today, to a chosen set or sets.
+
+    A view rather than a parameter threaded through the evaluator: every
+    evaluation path (event count, measure lookup, formula recursion)
+    would otherwise need to learn about set filtering and each would be
+    a place to forget it. Narrowing the source once means a filtered
+    evaluation is the same code as an unfiltered one, and the derived
+    measures narrow with it -- which is exactly what makes "Kills Per
+    Set" in set 3 divide by the 1 set she played in that slice.
+
+    Schema and grain are deliberately NOT narrowed: they describe what
+    the format can express, which a filter does not change.
+    """
+
+    def __init__(self, inner: "Source", keep: Dict[str, List[str]]):
+        self._inner = inner
+        self._keep = {axis: list(values) for axis, values in keep.items() if values}
+
+    @property
+    def grain(self) -> Grain:
+        return self._inner.grain
+
+    @property
+    def schema(self) -> SourceSchema:
+        return self._inner.schema
+
+    def identity_fields(self) -> Dict[str, str]:
+        return self._inner.identity_fields()
+
+    def axes(self) -> List[str]:
+        return self._inner.axes()
+
+    def measure_aggregation(self, name: str) -> str:
+        return self._inner.measure_aggregation(name)
+
+    def _restrict(self, frame: pd.DataFrame) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return frame
+        identity = self.identity_fields()
+        for axis, values in self._keep.items():
+            column = identity.get(axis)
+            if column and column in frame.columns:
+                frame = frame[frame[column].isin(values)]
+        return frame
+
+    def facts(self) -> pd.DataFrame:
+        return self._restrict(self._inner.facts())
+
+    def measures(self) -> pd.DataFrame:
+        return self._restrict(self._inner.measures())
+
+    def game_labels(self) -> List[str]:
+        return self._inner.game_labels()
+
+
+def scope_source(source: "Source", keep: Optional[Dict[str, List[str]]]) -> "Source":
+    """`source` unchanged when there is nothing to narrow, so the common
+    case adds no wrapper and no copying."""
+    if not keep or not any(keep.values()):
+        return source
+    return ScopedSource(source, keep)
