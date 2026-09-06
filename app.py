@@ -35,12 +35,14 @@ from recruiting_llm import (
 )
 from recruiting_operations import Operation, Rank, Slice, run_pipeline, describe_pipeline
 from recruiting_data_store import (
-    GameInfo, get_games, load_game_df, save_committed_tree, load_committed_tree,
+    save_committed_tree, load_committed_tree,
 )
 from recruiting_encoding import (
     EncodingAssignment, default_encoding, reconcile_encoding, resolve_clicked_point,
     set_game_order, slot_options, render as render_encoded_panels,
 )
+import source_dvw
+import workspace
 
 try:
     if "GROQ_API_KEY" not in os.environ and "GROQ_API_KEY" in st.secrets:
@@ -148,23 +150,6 @@ from evaluate_csv import (  # noqa: E402,F401
 # ──────────────────────────────────────────────────────────────
 # HELPERS 
 # ──────────────────────────────────────────────────────────────
-
-def _safe_get_games() -> List[GameInfo]:
-    try:
-        return get_games()
-    except RuntimeError:
-        return []
-
-
-@st.cache_data
-def get_known_player_pool() -> List[str]:
-    pool: Set[str] = set()
-    for game in _safe_get_games():
-        df = load_game_df(game.path)
-        if "Name" in df.columns:
-            pool.update(n for n in df["Name"].astype(str) if n.strip().startswith("#"))
-    return sorted(pool)
-
 
 def get_branches(tree: KnowledgeTree) -> dict:
     root = tree.committed.get(tree.root_id)
@@ -346,7 +331,7 @@ def render_node_panel(tree: KnowledgeTree, selected_id: Optional[str],
 
 
 @st.fragment
-def render_tree_graph(tree: KnowledgeTree, known_games: List[GameInfo]) -> None:
+def render_tree_graph(tree: KnowledgeTree, ws) -> None:
     col_l, col_mid, col_r = st.columns([1, 10, 1])
     with col_mid:
         ag_nodes, ag_edges = build_agraph_elements(tree, st.session_state.expanded_branches)
@@ -371,7 +356,7 @@ def render_tree_graph(tree: KnowledgeTree, known_games: List[GameInfo]) -> None:
             st.session_state.selected_node_id = clicked_node_id
         st.rerun(scope="fragment")
 
-    worked_example_df = load_game_df(known_games[0].path) if known_games else None
+    worked_example_df = ws.worked_example()
     render_node_panel(tree, st.session_state.selected_node_id, worked_example_df)
 
 
@@ -379,25 +364,71 @@ def render_tree_graph(tree: KnowledgeTree, known_games: List[GameInfo]) -> None:
 # SESSION INITIALIZATION
 # ──────────────────────────────────────────────────────────────
 
-if "tree" not in st.session_state:
-    loaded_tree = load_committed_tree()
-    _startup_save_warning = None
-    if loaded_tree is not None:
-        tree = loaded_tree
-    else:
-        tree, _ = seed_recruiting_tree()
-        try:
-            save_committed_tree(tree)
-        except RuntimeError as e:
-            _startup_save_warning = f"Couldn't save the seeded tree to VolleyData yet: {e}"
-    st.session_state.tree = tree
+# ── which data world are we in ────────────────────────────────
+# The workspace key is the ONLY thing the dropdown sets; everything
+# else -- source, knowledge base, where that base is saved, whether
+# per-set questions are answerable -- is rebuilt from it. Keeping one
+# switch means the UI can never end up showing one world's metrics
+# against another world's data.
+if "workspace_key" not in st.session_state:
+    st.session_state.workspace_key = workspace.RECRUITING
+
+
+@st.cache_resource(show_spinner="Loading data...")
+def _build_workspace(key: str, team: Optional[str]):
+    """Cached on the key so switching back and forth does not re-fetch
+    and re-parse. cache_resource rather than cache_data because a
+    Workspace holds a live Source with its own parsed frames, which
+    must not be copied per call."""
+    if key == workspace.PLAYER_ANALYSIS:
+        return workspace.build_player_analysis(team=team)
+    return workspace.build_recruiting()
+
+
+def _switch_workspace() -> None:
+    """
+    Everything scoped to the OLD world has to go.
+
+    A result set, a chart encoding, a player filter and a selected tree
+    node all name things -- players, games, metrics, node ids -- that
+    may not exist in the world being switched to. Leaving any of them
+    behind produces a chart drawn against the wrong roster or an editor
+    pointed at a node from another tree, which is worse than an empty
+    screen because it looks like an answer.
+    """
+    st.session_state.qa_last_decomposition = None
+    st.session_state.qa_action_results = []
+    st.session_state.qa_encodings = {}
+    st.session_state.qa_player_filter = []
+    st.session_state.expanded_branches = set()
+    st.session_state.selected_node_id = None
+    st.session_state.last_graph_click = None
+    st.session_state.editing_node_id = None
+    st.session_state.pending_delete_node_id = None
+    st.session_state.new_metric_step = "describe"
+    st.session_state.new_metric_worked_example = None
+    _clear_chart_encoding_widgets()
+    for key in [k for k in st.session_state if k.startswith("qa_playerfilter_")]:
+        del st.session_state[key]
+    # The games multiselect is keyed by label and would otherwise carry
+    # one world's opponents into the other's picker.
+    st.session_state.pop("qa_games_multiselect", None)
+
+
+def current_workspace():
+    return _build_workspace(
+        st.session_state.workspace_key, st.session_state.get("team_of_interest"),
+    )
+
+
+if "qa_trigger" not in st.session_state:
     st.session_state.new_metric_step = "describe"
     st.session_state.new_metric_worked_example = None
     st.session_state.pending_review_prefill = None
     st.session_state.pending_delete_node_id = None
     st.session_state.pending_delete_label = None
     st.session_state.editing_node_id = None
-    st.session_state.flash_message = ("warning", _startup_save_warning) if _startup_save_warning else None
+    st.session_state.flash_message = None
     st.session_state.qa_pending_query = None
     st.session_state.qa_trigger = False
     st.session_state.qa_last_decomposition = None
@@ -423,17 +454,56 @@ if st.session_state.qa_pending_query is not None:
     st.session_state.qa_pending_query = None
     st.session_state.qa_trigger = True
 
-tree = st.session_state.tree
-known_games = _safe_get_games()
-known_player_pool = get_known_player_pool()
+ws = current_workspace()
+tree = ws.tree
+source = ws.source
+known_games = ws.games()
+known_player_pool = ws.players()
+set_labels = ws.set_labels()
+
+# Kept in session state because the tree editor mutates it in place and
+# then asks the workspace to persist it.
+st.session_state.tree = tree
 
 
 # ──────────────────────────────────────────────────────────────
 # HEADER + FLASH MESSAGE
 # ──────────────────────────────────────────────────────────────
 
-st.title("🏐 Recruiting Knowledge Base")
-st.caption("Mixed-initiative knowledge base for volleyball analytics -- mechanically validated with EUD staging & diffs.")
+st.title("🏐 Volleyball Knowledge Base")
+
+_teams = ws.teams()
+col_source, col_team, col_caption = st.columns([2, 2, 4] if _teams else [2, 0.01, 6])
+with col_source:
+    st.selectbox(
+        "Data source",
+        list(workspace.LABELS),
+        format_func=lambda key: workspace.LABELS[key],
+        key="workspace_key",
+        on_change=_switch_workspace,
+        help="Each source has its own knowledge base, because their metrics "
+             "are built from different things -- export columns on one side, "
+             "individual actions on the other.",
+    )
+if _teams:
+    with col_team:
+        # A .dvw records BOTH teams' actions, so "whose season is this"
+        # is a real question rather than a preference: it decides whose
+        # roster is analysed and which name each match is labelled with.
+        st.selectbox(
+            "Team", _teams, index=_teams.index(ws.team) if ws.team in _teams else 0,
+            key="team_of_interest", on_change=_switch_workspace,
+            format_func=source_dvw.shorten_team_name,
+            help="Scouting files contain both teams. This picks whose players "
+                 "are analysed; the other side becomes the opponent.",
+        )
+with col_caption:
+    st.caption(ws.caption)
+    st.caption("Mixed-initiative knowledge base for volleyball analytics -- "
+               "mechanically validated with EUD staging & diffs.")
+
+for _warning in ws.warnings:
+    st.warning(_warning)
 
 if st.session_state.flash_message:
     level, text = st.session_state.flash_message
@@ -450,11 +520,24 @@ tab_qa, tab_kb = st.tabs(["Ask a Question", "Knowledge Base"])
 with tab_qa:
     st.header("Ask a Question")
 
-    game_opponents = [g.opponent for g in known_games]
+    game_opponents = known_games
     st.multiselect(
         "Games (default scope for any part of your question that doesn't name one)",
         game_opponents, default=game_opponents, key="qa_games_multiselect",
     )
+
+    # Offered only where the data can answer it. The CSV source declares
+    # no Set axis (source.axes()), so this whole block is absent there
+    # rather than disabled -- a control that cannot do anything is worse
+    # than no control, because it implies the answer exists.
+    if set_labels:
+        st.multiselect(
+            "Sets (leave empty for all sets together)",
+            set_labels, default=[], key="qa_sets_multiselect",
+            help="Narrowing to a set also rebases per-set rates: "
+                 "\"Kills Per Set\" inside one set is that set's kills.",
+        )
+
 
     with st.form("qa_query_form", clear_on_submit=False):
         st.text_input(
@@ -482,16 +565,20 @@ with tab_qa:
         else:
             try:
                 with st.spinner("Routing your question via local LLM..."):
-                    decomposition = decompose_recruiting_query(query_text, tree, game_opponents)
+                    decomposition = decompose_recruiting_query(
+                        query_text, tree, game_opponents, supports_sets=ws.supports_sets,
+                    )
             except LLMUnavailableError as e:
                 st.session_state.qa_last_decomposition = None
                 st.session_state.qa_action_results = []
                 st.session_state.flash_message = ("error", f"LLM unreachable -- can't process your question. ({e})")
                 st.rerun()
 
-            selected_games = [g for g in known_games if g.opponent in st.session_state.qa_games_multiselect]
+            selected_games = [g for g in known_games
+                              if g in st.session_state.qa_games_multiselect]
             action_results = execute_query_actions(
-                decomposition, tree, known_games, known_player_pool, selected_games,
+                decomposition, tree, source, selected_games,
+                selected_sets=st.session_state.get("qa_sets_multiselect") or None,
             )
 
             st.session_state.qa_last_decomposition = decomposition
@@ -515,10 +602,12 @@ with tab_qa:
         )
         if current_player_filter != st.session_state.qa_player_filter:
             st.session_state.qa_player_filter = current_player_filter
-            selected_games = [g for g in known_games if g.opponent in st.session_state.qa_games_multiselect]
+            selected_games = [g for g in known_games
+                              if g in st.session_state.qa_games_multiselect]
             action_results = execute_query_actions(
-                decomposition, tree, known_games, known_player_pool, selected_games,
+                decomposition, tree, source, selected_games,
                 player_filter=current_player_filter or None,
+                selected_sets=st.session_state.get("qa_sets_multiselect") or None,
             )
             st.session_state.qa_action_results = action_results
             st.session_state.qa_encodings = {}
@@ -743,7 +832,7 @@ with tab_kb:
     st.header("Current Metrics Tree (committed)")
     st.caption("Persisted to the private VolleyData repo — updates on merge.")
 
-    render_tree_graph(tree, known_games)
+    render_tree_graph(tree, ws)
 
     with st.expander("Delete a metric by name"):
         delete_query = st.text_input("Metric name (exact label)", key="delete_by_name_query")
@@ -837,7 +926,7 @@ with tab_kb:
             else:
                 expr = f"[{result.column_ref}]" if result.spec_kind == "column" else result.formula_expr
                 spec = build_spec_from_expr(expr, result.human_description, extra_valid_refs=collect_leaf_labels(tree))
-                worked_example_df = load_game_df(known_games[0].path) if known_games else None
+                worked_example_df = ws.worked_example()
                 st.session_state.new_metric_worked_example = (
                     evaluate_spec(spec, worked_example_df, tree=tree) if worked_example_df is not None else None
                 )
@@ -882,7 +971,7 @@ with tab_kb:
         if col_recompute.button("Recompute Worked Example"):
             spec = build_spec_from_expr(st.session_state.review_formula_expr, st.session_state.review_human_description,
                                          extra_valid_refs=collect_leaf_labels(tree))
-            worked_example_df = load_game_df(known_games[0].path) if known_games else None
+            worked_example_df = ws.worked_example()
             st.session_state.new_metric_worked_example = (
                 evaluate_spec(spec, worked_example_df, tree=tree) if worked_example_df is not None else None
             )
@@ -956,7 +1045,7 @@ with tab_kb:
             tree.merge()
             flash_level, flash_text = "success", f"Merged {n_changes} change(s) into committed tree."
             try:
-                save_committed_tree(tree)
+                ws.save_tree(tree)
             except RuntimeError as e:
                 flash_level, flash_text = "warning", (
                     f"Merged for this session, but couldn't save to VolleyData "

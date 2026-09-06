@@ -32,6 +32,7 @@ import pytest
 
 import app
 import recruiting_data_store
+from recruiting_data_store import GameInfo
 from recruiting_llm import (
     LLMUnavailableError, _validate_and_repair, decompose_recruiting_query,
     merge_same_shape_actions, parse_phrase_to_formula, parse_phrase_to_formula_llm,
@@ -81,7 +82,7 @@ def _synthetic_row(name: str, attack_k: float, attack_e: float, sets_played: flo
 
 
 @pytest.fixture
-def synthetic_games() -> List[Tuple["app.GameInfo", pd.DataFrame]]:
+def synthetic_games() -> List[Tuple["GameInfo", pd.DataFrame]]:
     """3 controlled games x 2 players, hand-picked values so pipeline
     results (mean/rank/compare) can be asserted EXACTLY rather than just
     'didn't crash'.
@@ -92,9 +93,9 @@ def synthetic_games() -> List[Tuple["app.GameInfo", pd.DataFrame]]:
     Sloan's own Kills (Attack K, raw): Game A=12 (>=10), Game B=9 (<10), Game C=5 (<10)
     Azana's own Kills (Attack K, raw): Game A=8 (<10), Game B=15 (>=10), Game C=6 (<10)
     """
-    game_a = app.GameInfo(path="synthetic-A", filename="A.csv", opponent="Game A")
-    game_b = app.GameInfo(path="synthetic-B", filename="B.csv", opponent="Game B")
-    game_c = app.GameInfo(path="synthetic-C", filename="C.csv", opponent="Game C")
+    game_a = GameInfo(path="synthetic-A", filename="A.csv", opponent="Game A")
+    game_b = GameInfo(path="synthetic-B", filename="B.csv", opponent="Game B")
+    game_c = GameInfo(path="synthetic-C", filename="C.csv", opponent="Game C")
 
     df_a = pd.DataFrame([_synthetic_row("#7 Sloan T.", 12, 2, 3, 0.8), _synthetic_row("#22 Azana S.", 8, 1, 3, 0.7)])
     df_b = pd.DataFrame([_synthetic_row("#7 Sloan T.", 9, 3, 3, 0.6), _synthetic_row("#22 Azana S.", 15, 2, 3, 0.9)])
@@ -104,7 +105,7 @@ def synthetic_games() -> List[Tuple["app.GameInfo", pd.DataFrame]]:
 
 
 def _run_repaired_actions(raw_decomposition: dict, tree: KnowledgeTree,
-                           game_dfs: List[Tuple["app.GameInfo", pd.DataFrame]],
+                           game_dfs: List[Tuple["GameInfo", pd.DataFrame]],
                            known_player_pool: List[str]) -> List[dict]:
     """
     Repairs a raw decomposition and runs it through the REAL action

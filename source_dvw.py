@@ -356,13 +356,28 @@ class DvwSource(Source):
         return labels
 
     def teams(self) -> List[str]:
-        """Every team appearing in the loaded files -- what a caller
-        picks team_of_interest from."""
-        teams = set()
+        """
+        Every team appearing in the loaded files -- what a caller picks
+        team_of_interest from -- most-played first.
+
+        The order matters: a scouting corpus is ABOUT one team, which
+        appears in every file while opponents appear in one or two. That
+        team is the right default, and sorting alphabetically would have
+        buried it.
+        """
+        counts: Dict[str, int] = {}
         for path in self.paths:
             _, home, visiting, _, _, _ = _read_match(path)
-            teams.update([home, visiting])
-        return sorted(teams)
+            for team in {home, visiting}:
+                counts[team] = counts.get(team, 0) + 1
+        return sorted(counts, key=lambda team: (-counts[team], team))
+
+    def default_team(self) -> Optional[str]:
+        """The team this corpus is about, or None if there are no files.
+        Without it, MatchInfo.opponent falls back to the visiting team
+        and a match Maryland played away is labelled "Maryland"."""
+        teams = self.teams()
+        return teams[0] if teams else None
 
     def _load(self) -> None:
         fact_frames, measure_frames, matches = [], [], []

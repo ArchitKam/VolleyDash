@@ -80,6 +80,32 @@ class Workspace:
             return []
         return sorted(facts[column].dropna().unique())
 
+    def worked_example(self):
+        """
+        A frame the metric editor can compute a real example against.
+
+        For the CSV world that is one match's export, which is what the
+        editor has always used -- a spec there is a column reference, so
+        it needs the columns. For the event world there is no such
+        frame: an event metric is a filter over actions and its worked
+        example would have to be computed, not read off a row. Returning
+        None makes the editor omit the example rather than invent one.
+        """
+        frames = getattr(self.source, "frames", None)
+        if frames is None:
+            return None
+        loaded = frames()
+        return loaded[0][1] if loaded else None
+
+    def teams(self) -> List[str]:
+        """Teams selectable as the point of view, most-played first.
+        Empty for a source that has no such notion."""
+        return list(getattr(self.source, "teams", list)())
+
+    @property
+    def team(self) -> Optional[str]:
+        return getattr(self.source, "team_of_interest", None)
+
     def set_labels(self) -> List[str]:
         """Every set present in the loaded data, in set order. Empty for
         a source without the axis, which is what the UI checks before
@@ -164,6 +190,12 @@ def build_player_analysis(team: Optional[str] = None) -> Workspace:
             f"{data_store.DVW_DIR_PATH}/ folder, or set "
             f"{data_store.DVW_LOCAL_DIR_ENV} to a local directory."
         )
+
+    if team is None and paths:
+        # Whose season is this? Without an answer, MatchInfo.opponent
+        # falls back to the visiting team, so every away match gets
+        # labelled with the scouted team's own name.
+        team = DvwSource(paths).default_team()
 
     source = DvwSource(paths, team_of_interest=team)
 

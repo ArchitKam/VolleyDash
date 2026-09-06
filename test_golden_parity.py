@@ -32,6 +32,7 @@ import pytest
 
 import app
 import recruiting_data_store
+from recruiting_data_store import GameInfo
 from recruiting_llm import _validate_and_repair
 from recruiting_operations import pipeline_to_dicts
 from source_csv import CsvSource
@@ -69,13 +70,13 @@ def synthetic_games() -> List[Tuple[Any, pd.DataFrame]]:
            Azana:  8/3=2.667, 15/3=5.000, 6/2=3.000  (mean 3.5556)
     """
     games = [
-        (app.GameInfo(path="synthetic-A", filename="A.csv", opponent="Game A"),
+        (GameInfo(path="synthetic-A", filename="A.csv", opponent="Game A"),
          pd.DataFrame([_synthetic_row("#7 Sloan T.", 12, 2, 3, 0.8),
                        _synthetic_row("#22 Azana S.", 8, 1, 3, 0.7)])),
-        (app.GameInfo(path="synthetic-B", filename="B.csv", opponent="Game B"),
+        (GameInfo(path="synthetic-B", filename="B.csv", opponent="Game B"),
          pd.DataFrame([_synthetic_row("#7 Sloan T.", 9, 3, 3, 0.6),
                        _synthetic_row("#22 Azana S.", 15, 2, 3, 0.9)])),
-        (app.GameInfo(path="synthetic-C", filename="C.csv", opponent="Game C"),
+        (GameInfo(path="synthetic-C", filename="C.csv", opponent="Game C"),
          pd.DataFrame([_synthetic_row("#7 Sloan T.", 5, 1, 2, 0.75),
                        _synthetic_row("#22 Azana S.", 6, 0, 2, 0.65)])),
     ]

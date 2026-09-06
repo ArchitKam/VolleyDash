@@ -22,6 +22,7 @@ import pytest
 
 import app
 import recruiting_data_store
+from recruiting_data_store import GameInfo
 from evaluate import evaluate_metric
 from recruiting_tree import KnowledgeTree, NodeKind
 from source import Grain
@@ -45,18 +46,18 @@ def real_tree() -> KnowledgeTree:
 
 
 @pytest.fixture
-def games() -> List[Tuple[app.GameInfo, pd.DataFrame]]:
+def games() -> List[Tuple[GameInfo, pd.DataFrame]]:
     """Includes a BLANK cell and a ZERO denominator on purpose: those are
     the two cases where the measure and event grains legitimately
     disagree, so they are exactly where a careless merge of the two
     evaluators would have shown up."""
     return [
-        (app.GameInfo(path="a", filename="a.csv", opponent="Game A"),
+        (GameInfo(path="a", filename="a.csv", opponent="Game A"),
          pd.DataFrame([_row("#7 Sloan T.", 12, 2, 3, 0.8),
                        _row("#22 Azana S.", 8, 1, 3, 0.7),
                        {"Name": "Team Totals", "Attack K": 20, "Attack E": 3,
                         "Sets Sets Played": 3, "Receive Pass%": 0.75}])),
-        (app.GameInfo(path="b", filename="b.csv", opponent="Game B"),
+        (GameInfo(path="b", filename="b.csv", opponent="Game B"),
          pd.DataFrame([_row("#7 Sloan T.", 9, 3, 0, 0.6),          # zero denominator
                        _row("#22 Azana S.", 15, 2, 3, None)])),    # blank cell
     ]

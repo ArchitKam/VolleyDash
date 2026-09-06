@@ -210,7 +210,8 @@ def prepare_pipeline_frame(result_df: pd.DataFrame, pipeline: List[Operation],
 
 def execute_query_actions(decomposition: Dict[str, Any], tree: KnowledgeTree, source: Source,
                            selected_games: Optional[List[str]] = None,
-                           player_filter: Optional[List[str]] = None) -> List[dict]:
+                           player_filter: Optional[List[str]] = None,
+                           selected_sets: Optional[List[str]] = None) -> List[dict]:
     """
     Run every action in an already-decomposed query. No LLM call.
 
@@ -291,11 +292,15 @@ def execute_query_actions(decomposition: Dict[str, Any], tree: KnowledgeTree, so
         # axis asks for the cube to be SPLIT by set. Asking for set 3
         # grouped by set is legal and yields one row per player.
         supports_sets = SET_AXIS in source.identity_fields()
+        # A set named IN the question wins over the picker, exactly as a
+        # game_hint wins over the selected games: the picker sets the
+        # default scope, the question overrides it for that action.
         set_hint = action.get("set_hint")
+        set_scope = [set_hint] if set_hint else list(selected_sets or [])
         set_note = None
         wants_set_axis = any(getattr(op, "axis", None) == SET_AXIS for op in pipeline)
 
-        if not supports_sets and (set_hint or wants_set_axis):
+        if not supports_sets and (set_scope or wants_set_axis):
             # Refused by name rather than ignored: silently returning
             # match totals for "in set 3" is a wrong answer that looks
             # like a right one.
@@ -303,9 +308,9 @@ def execute_query_actions(decomposition: Dict[str, Any], tree: KnowledgeTree, so
                 "This data has one row per player per match, so it can't be "
                 "broken down by set -- showing match totals instead."
             )
-            set_hint, wants_set_axis = None, False
+            set_hint, set_scope, wants_set_axis = None, [], False
 
-        eval_source = scope_source(source, {SET_AXIS: [set_hint]}) if set_hint else source
+        eval_source = scope_source(source, {SET_AXIS: set_scope}) if set_scope else source
         axes = ([PLAYER_AXIS, GAME_AXIS, SET_AXIS] if (supports_sets and wants_set_axis)
                 else None)
 
@@ -356,7 +361,8 @@ def execute_query_actions(decomposition: Dict[str, Any], tree: KnowledgeTree, so
         results.append({
             "action": action, "is_category": is_category, "resolved_player": resolved_player,
             "action_games": action_games, "game_note": game_note,
-            "set_hint": set_hint, "set_note": set_note, "result_df": frame,
+            "set_hint": set_hint, "set_scope": set_scope, "set_note": set_note,
+            "result_df": frame,
             "pipeline": pipeline, "pipeline_notes": pipeline_notes,
         })
 
