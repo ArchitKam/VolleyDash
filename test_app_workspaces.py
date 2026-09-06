@@ -118,17 +118,19 @@ def test_the_team_picker_defaults_to_the_team_the_corpus_is_about():
 
 # ── switching does not leak state between worlds ───────────────
 
-@requires_secrets
 def test_the_switch_callback_clears_every_scoped_key():
-    """Called directly, because AppTest cannot fire an on_change without
-    a real widget interaction -- and the contract worth pinning is what
-    the callback clears, not how Streamlit dispatches it."""
-    import streamlit as st
+    """
+    Checked against a plain dict rather than a live session.
 
-    import app
+    workspace.clear_scoped_state takes the session mapping as an
+    argument precisely so this test needs no Streamlit runtime and no
+    `import app` -- importing app.py EXECUTES it, which in a bare
+    context leaves an st.form block open and makes every later AppTest
+    fail with an unrelated error.
+    """
+    import workspace
 
-    st.session_state.clear()
-    st.session_state.update({
+    state = dict({
         "qa_action_results": [{"stale": True}],
         "qa_last_decomposition": {"actions": []},
         "qa_player_filter": ["#7 Sloan T."],
@@ -140,17 +142,17 @@ def test_the_switch_callback_clears_every_scoped_key():
         "editing_node_id": "node-1",
     })
 
-    app._switch_workspace()
+    workspace.clear_scoped_state(state)
 
-    assert st.session_state["qa_action_results"] == []
-    assert st.session_state["qa_last_decomposition"] is None
-    assert st.session_state["qa_player_filter"] == []
-    assert st.session_state["qa_encodings"] == {}
-    assert st.session_state["selected_node_id"] is None
-    assert st.session_state["editing_node_id"] is None
-    assert "qa_enc_0_x" not in st.session_state, "chart widget state is keyed per result set"
-    assert "qa_playerfilter_#7 Sloan T." not in st.session_state
-    assert "qa_games_multiselect" not in st.session_state, (
+    assert state["qa_action_results"] == []
+    assert state["qa_last_decomposition"] is None
+    assert state["qa_player_filter"] == []
+    assert state["qa_encodings"] == {}
+    assert state["selected_node_id"] is None
+    assert state["editing_node_id"] is None
+    assert "qa_enc_0_x" not in state, "chart widget state is keyed per result set"
+    assert "qa_playerfilter_#7 Sloan T." not in state
+    assert "qa_games_multiselect" not in state, (
         "the games picker is keyed by label and would carry one world's opponents "
         "into the other's list"
     )

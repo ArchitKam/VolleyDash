@@ -30,7 +30,11 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import pytest
 
-import app
+from evaluate_csv import run_category_query, run_metric_query
+from query import (
+    consolidate_action_results, execute_query_actions, find_leaf_by_exact_label,
+    get_branches,
+)
 import recruiting_data_store
 from recruiting_data_store import GameInfo
 from recruiting_llm import (
@@ -42,7 +46,7 @@ from recruiting_tree import KnowledgeTree
 from source_csv import CsvSource
 
 # The real recruiting_kb_data.json now lives in the private VolleyData repo,
-# not on local disk -- app.load_committed_tree() needs live GITHUB_DATA_REPO/
+# not on local disk -- recruiting_data_store.load_committed_tree() needs live GITHUB_DATA_REPO/
 # GITHUB_DATA_TOKEN secrets and network access to reach it, neither of which
 # CI/offline test runs can guarantee. This points at the local staging copy
 # (see VolleyData_upload/ alongside this file, the same file that gets
@@ -72,7 +76,7 @@ def real_tree() -> KnowledgeTree:
     with open(_STAGED_TREE_JSON) as f:
         tree = recruiting_data_store._tree_from_json_dict(json.load(f))
     for label in ("Kills Per Set", "Passing quality percentage", "Kills"):
-        assert app.find_leaf_by_exact_label(tree, label) is not None, f"expected '{label}' to be committed"
+        assert find_leaf_by_exact_label(tree, label) is not None, f"expected '{label}' to be committed"
     return tree
 
 
@@ -122,7 +126,7 @@ def _run_repaired_actions(raw_decomposition: dict, tree: KnowledgeTree,
     source, which is where the app gets it too.
     """
     decomposition = _validate_and_repair(raw_decomposition, tree)
-    return app.execute_query_actions(decomposition, tree, CsvSource(game_dfs))
+    return execute_query_actions(decomposition, tree, CsvSource(game_dfs))
 
 
 KNOWN_PLAYERS = ["#7 Sloan T.", "#22 Azana S."]
@@ -158,8 +162,8 @@ def test_regression_single_metric_no_pipeline(real_tree, synthetic_games):
     assert math.isclose(values["Game C"], 2.5)
 
     # Byte-identical to calling run_metric_query directly ourselves.
-    leaf = app.find_leaf_by_exact_label(real_tree, "Kills Per Set")
-    direct = app.run_metric_query(leaf.spec, real_tree, synthetic_games, player_name="#7 Sloan T.")
+    leaf = find_leaf_by_exact_label(real_tree, "Kills Per Set")
+    direct = run_metric_query(leaf.spec, real_tree, synthetic_games, player_name="#7 Sloan T.")
     pd.testing.assert_frame_equal(df.reset_index(drop=True), direct.reset_index(drop=True))
 
 
@@ -557,7 +561,7 @@ def test_consolidate_action_results_keeps_both_players_for_same_metric():
             ]),
         },
     ]
-    consolidated = app.consolidate_action_results(action_results)
+    consolidated = consolidate_action_results(action_results)
     assert set(consolidated["Player"]) == {"#7 Sloan T.", "#14 Kendal L."}
     assert len(consolidated) == 4  # 2 players x 2 games, nobody dropped
     assert list(consolidated.columns) == ["Player", "Game", "Kills Per Set"]

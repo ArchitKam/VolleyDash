@@ -30,7 +30,11 @@ from typing import Any, Dict, List, Tuple
 import pandas as pd
 import pytest
 
-import app
+from evaluate_csv import run_category_query, run_metric_query
+from query import (
+    consolidate_action_results, execute_query_actions, find_leaf_by_exact_label,
+    get_branches,
+)
 import recruiting_data_store
 from recruiting_data_store import GameInfo
 from recruiting_llm import _validate_and_repair
@@ -227,8 +231,8 @@ def _snapshot(action_results: List[dict], consolidated: pd.DataFrame) -> dict:
 
 def _run_case(raw: dict, tree: KnowledgeTree, source) -> dict:
     decomposition = _validate_and_repair(dict(raw), tree)
-    action_results = app.execute_query_actions(decomposition, tree, source)
-    consolidated = app.consolidate_action_results(action_results)
+    action_results = execute_query_actions(decomposition, tree, source)
+    consolidated = consolidate_action_results(action_results)
     return _snapshot(action_results, consolidated)
 
 

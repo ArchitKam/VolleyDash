@@ -395,24 +395,11 @@ def _switch_workspace() -> None:
     behind produces a chart drawn against the wrong roster or an editor
     pointed at a node from another tree, which is worse than an empty
     screen because it looks like an answer.
+
+    The list itself lives in workspace.py so it can be tested without
+    executing this script.
     """
-    st.session_state.qa_last_decomposition = None
-    st.session_state.qa_action_results = []
-    st.session_state.qa_encodings = {}
-    st.session_state.qa_player_filter = []
-    st.session_state.expanded_branches = set()
-    st.session_state.selected_node_id = None
-    st.session_state.last_graph_click = None
-    st.session_state.editing_node_id = None
-    st.session_state.pending_delete_node_id = None
-    st.session_state.new_metric_step = "describe"
-    st.session_state.new_metric_worked_example = None
-    _clear_chart_encoding_widgets()
-    for key in [k for k in st.session_state if k.startswith("qa_playerfilter_")]:
-        del st.session_state[key]
-    # The games multiselect is keyed by label and would otherwise carry
-    # one world's opponents into the other's picker.
-    st.session_state.pop("qa_games_multiselect", None)
+    workspace.clear_scoped_state(st.session_state)
 
 
 def current_workspace():

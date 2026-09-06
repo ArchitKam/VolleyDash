@@ -260,3 +260,56 @@ LABELS: Dict[str, str] = {
     RECRUITING: "Recruiting (match exports)",
     PLAYER_ANALYSIS: "Player analysis (play-by-play)",
 }
+
+
+# ──────────────────────────────────────────────────────────────
+# SWITCHING
+# ──────────────────────────────────────────────────────────────
+
+#: Session keys scoped to ONE workspace, and their value on reset.
+#: Everything here names something -- a player, a game, a metric, a tree
+#: node id -- that may simply not exist in the world being switched to.
+SCOPED_STATE = {
+    "qa_last_decomposition": None,
+    "qa_action_results": [],
+    "qa_encodings": {},
+    "qa_player_filter": [],
+    "expanded_branches": set(),
+    "selected_node_id": None,
+    "last_graph_click": None,
+    "editing_node_id": None,
+    "pending_delete_node_id": None,
+    "new_metric_step": "describe",
+    "new_metric_worked_example": None,
+}
+
+#: Widget keys that are generated per player / per chart slot and so
+#: cannot be listed literally. Streamlit keeps widget values under these
+#: keys across reruns, which is exactly why they have to be deleted
+#: rather than merely reset.
+SCOPED_KEY_PREFIXES = ("qa_enc_", "qa_playerfilter_")
+
+#: Widget keys that are keyed by LABEL, and would carry one world's
+#: opponents into the other world's picker.
+SCOPED_WIDGET_KEYS = ("qa_games_multiselect", "qa_sets_multiselect")
+
+
+def clear_scoped_state(session_state) -> None:
+    """
+    Drop everything belonging to the workspace being left.
+
+    Lives here rather than in app.py so it is testable without executing
+    the Streamlit script -- importing app.py runs it, which in a bare
+    context leaves an st.form block open and breaks the next AppTest.
+    Session hygiene is not layout, and it should not need a UI to check.
+    """
+    for key, value in SCOPED_STATE.items():
+        session_state[key] = set() if isinstance(value, set) else (
+            list(value) if isinstance(value, list) else
+            dict(value) if isinstance(value, dict) else value
+        )
+    for key in [k for k in list(session_state) if k.startswith(SCOPED_KEY_PREFIXES)]:
+        del session_state[key]
+    for key in SCOPED_WIDGET_KEYS:
+        if key in session_state:
+            del session_state[key]

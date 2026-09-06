@@ -6,7 +6,7 @@ Proves the unified path is the SAME path for recruiting.
 The golden lock (test_golden_parity.py) freezes the app's output end to
 end. This file checks the narrower, sharper claim that makes the lock
 hold: for every committed metric in the real knowledge base,
-evaluate_metric(spec, CsvSource(...)) equals app.run_metric_query(spec,
+evaluate_metric(spec, CsvSource(...)) equals run_metric_query(spec,
 ...) exactly -- same rows, same order, same values, same Note text.
 
 Comparing against the ORIGINAL function rather than a recorded
@@ -20,7 +20,11 @@ from typing import List, Tuple
 import pandas as pd
 import pytest
 
-import app
+from evaluate_csv import run_category_query, run_metric_query
+from query import (
+    consolidate_action_results, execute_query_actions, find_leaf_by_exact_label,
+    get_branches,
+)
 import recruiting_data_store
 from recruiting_data_store import GameInfo
 from evaluate import evaluate_metric
@@ -105,7 +109,7 @@ def test_every_committed_metric_matches_run_metric_query(real_tree, games):
     source = CsvSource(games)
     checked = 0
     for label, spec in _all_committed_specs(real_tree):
-        expected = app.run_metric_query(spec, real_tree, games)
+        expected = run_metric_query(spec, real_tree, games)
         produced = evaluate_metric(spec, source, real_tree)
         pd.testing.assert_frame_equal(
             produced.reset_index(drop=True), expected.reset_index(drop=True),
@@ -118,7 +122,7 @@ def test_every_committed_metric_matches_run_metric_query(real_tree, games):
 def test_parity_holds_when_filtered_to_one_player(real_tree, games):
     source = CsvSource(games)
     for label, spec in _all_committed_specs(real_tree):
-        expected = app.run_metric_query(spec, real_tree, games, player_name="#7 Sloan T.")
+        expected = run_metric_query(spec, real_tree, games, player_name="#7 Sloan T.")
         produced = evaluate_metric(spec, source, real_tree, player="#7 Sloan T.")
         pd.testing.assert_frame_equal(
             produced.reset_index(drop=True), expected.reset_index(drop=True),
@@ -130,7 +134,7 @@ def test_blank_and_zero_denominator_still_report_errors_not_numbers(real_tree, g
     """The two grain-specific behaviours the CSV evaluator was kept for.
     If this ever returns 0.0 or NaN with an empty Note, the measure path
     has been quietly replaced by the event one."""
-    rate = app.find_leaf_by_exact_label(real_tree, "Kills Per Set")
+    rate = find_leaf_by_exact_label(real_tree, "Kills Per Set")
     assert rate is not None
     frame = evaluate_metric(rate.spec, CsvSource(games), real_tree)
 
@@ -141,12 +145,12 @@ def test_blank_and_zero_denominator_still_report_errors_not_numbers(real_tree, g
 
 
 def test_a_category_matches_run_category_query(real_tree, games):
-    branch_id = app.get_branches(real_tree).get("Attack")
+    branch_id = get_branches(real_tree).get("Attack")
     if branch_id is None:
         pytest.skip("no Attack branch committed")
     from evaluate import evaluate_category
 
-    expected = app.run_category_query(real_tree, branch_id, games)
+    expected = run_category_query(real_tree, branch_id, games)
     produced = evaluate_category(real_tree, branch_id, CsvSource(games))
     pd.testing.assert_frame_equal(
         produced.reset_index(drop=True), expected.reset_index(drop=True), check_dtype=False,
