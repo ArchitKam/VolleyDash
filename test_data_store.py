@@ -409,3 +409,46 @@ def test_an_unreadable_target_aborts_before_writing(monkeypatch):
     with pytest.raises(RuntimeError, match="Couldn't check"):
         store.put_file_bytes("r/d", "tok", "dvw/a.dvw", b"x", "msg")
     assert not puts
+
+
+# ──────────────────────────────────────────────────────────────
+# Opponent parsing
+# ──────────────────────────────────────────────────────────────
+
+class TestParseOpponent:
+    """Exports arrive with either spaces or underscores as the word
+    separator. Only the space form used to parse, so every
+    underscore-named file fell through to its whole stem and put
+    "01_Nat_vs_Victory_15_Eite_-_Stats" on the Game axis."""
+
+    def test_the_space_form_is_unchanged(self):
+        """This is the behaviour that already worked; the fix must not
+        move it."""
+        assert store._parse_opponent("01 Nat vs Vegas Aces - Stats.csv") == "Vegas Aces"
+        assert store._parse_opponent("07 Nat vs Mavs 816 - Stats.csv") == "Mavs 816"
+
+    def test_the_underscore_form_now_parses_too(self):
+        assert store._parse_opponent("01_Nat_vs_Victory_15_Eite_-_Stats.csv") == "Victory 15 Eite"
+        assert store._parse_opponent("14_Nat_vs_Corpus_Christi_Surge_-_Stats.csv") == "Corpus Christi Surge"
+
+    def test_the_two_forms_agree_with_each_other(self):
+        """The separator is an artifact of how the file was downloaded,
+        not information. The same match must land on the same Game axis
+        value either way, or the same opponent appears twice."""
+        for spaced in ("01 Nat vs Vegas Aces - Stats.csv",
+                       "12 Nat vs Rio Grande Volley - Stats.csv"):
+            assert store._parse_opponent(spaced) == store._parse_opponent(spaced.replace(" ", "_"))
+
+    def test_vs_is_matched_case_insensitively_and_with_a_dot(self):
+        assert store._parse_opponent("01_Nat_VS_Vegas_Aces_-_Stats.csv") == "Vegas Aces"
+        assert store._parse_opponent("01 Nat vs. Vegas Aces - Stats.csv") == "Vegas Aces"
+
+    def test_an_unparseable_name_keeps_its_stem_rather_than_going_blank(self):
+        """A visibly wrong label beats a missing one: an empty Game axis
+        value groups every such match together silently."""
+        assert store._parse_opponent("weird-name.csv") == "weird-name"
+        assert store._parse_opponent("scrimmage.csv") == "scrimmage"
+
+    def test_an_opponent_whose_name_contains_vs_is_not_split_twice(self):
+        """maxsplit=1: only the FIRST "vs" separates us from them."""
+        assert store._parse_opponent("01_Nat_vs_A_vs_B_Club_-_Stats.csv") == "A vs B Club"

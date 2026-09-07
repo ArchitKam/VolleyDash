@@ -62,7 +62,21 @@ class GameInfo:
 
 
 def _parse_opponent(filename: str) -> str:
-    stem = os.path.splitext(filename)[0]
+    """
+    "01 Nat vs Vegas Aces - Stats.csv" -> "Vegas Aces".
+
+    Exports arrive with either spaces or underscores as the word
+    separator depending on how they were downloaded, so underscores are
+    normalised to spaces before the patterns run. Without that, every
+    underscore-named file failed BOTH patterns and fell through to the
+    whole stem -- which is what put "01_Nat_vs_Victory_15_Eite_-_Stats"
+    on the Game axis instead of "Victory 15 Eite".
+
+    A file that matches nothing still returns its stem rather than "":
+    an unparseable name is better on the axis than a blank label, and it
+    is visibly wrong rather than quietly missing.
+    """
+    stem = os.path.splitext(filename)[0].replace("_", " ")
     parts = _VS_SPLIT_RE.split(stem, maxsplit=1)
     tail = parts[1] if len(parts) == 2 else stem
     return _STATS_SUFFIX_RE.sub("", tail).strip()
