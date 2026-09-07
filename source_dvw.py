@@ -115,6 +115,19 @@ CANDIDATE_DIMENSIONS = [
 SKILL_FIELD = "skill"
 EVALUATION_FIELD = "evaluation_code"
 
+# Names whose generic shortening would be WRONG rather than merely ugly.
+# The comma rule below turns "University of California, Los Angeles" into
+# "California" -- which is a different school. These are display names
+# only; MatchInfo keeps the full legal name as the key.
+_TEAM_ALIASES = {
+    "university of california los angeles": "UCLA",
+    "university of california, los angeles": "UCLA",
+    "university of southern california": "USC",
+    "university of illinois urbana-champaign": "Illinois",
+    "university of wisconsin-madison": "Wisconsin",
+    "pennsylvania state university": "Penn State",
+}
+
 _UNIVERSITY_NOISE = [
     # Campus qualifier first ("Indiana University, Bloomington" ->
     # "Indiana University"), otherwise the trailing-University rule
@@ -138,6 +151,9 @@ def shorten_team_name(name: str) -> str:
     if not name:
         return ""
     short = name.strip()
+    alias = _TEAM_ALIASES.get(short.lower())
+    if alias:
+        return alias
     for pattern, replacement in _UNIVERSITY_NOISE:
         short = pattern.sub(replacement, short)
     return short.strip().strip(",") or name.strip()
@@ -246,12 +262,23 @@ class MatchInfo:
         return self.visiting_team
 
     @property
+    def short_opponent(self) -> str:
+        """Just the other team, e.g. "Purdue" -- what a coach calls the
+        match, and what the CSV dashboard puts on its Game axis."""
+        return shorten_team_name(self.opponent)
+
+    @property
     def label(self) -> str:
-        """Opponent plus date -- the date is REQUIRED for uniqueness,
-        since this corpus contains three opponents played twice."""
+        """
+        The Game axis value: opponent plus date, e.g. "Purdue (Nov 15)".
+
+        The date is not decoration. Three opponents are played twice in
+        this corpus, and two matches sharing an axis value would
+        silently add their stats together -- a doubled kill count looks
+        like a real number.
+        """
         day = format_match_day(self.day)
-        opponent = shorten_team_name(self.opponent)
-        return f"{opponent} ({day})" if day else opponent
+        return f"{self.short_opponent} ({day})" if day else self.short_opponent
 
     def __repr__(self) -> str:
         return f"MatchInfo({self.label!r}, {self.filename!r})"

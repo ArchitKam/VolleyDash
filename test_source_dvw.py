@@ -58,6 +58,24 @@ def test_shorten_team_name_handles_the_real_forms_in_this_corpus():
     assert shorten_team_name("Rutgers University") == "Rutgers"
 
 
+def test_a_campus_qualifier_is_never_dropped_when_that_renames_the_school():
+    """The generic rule strips everything after a comma, which turned
+    "University of California, Los Angeles" into "California" -- the
+    name of a DIFFERENT school. Names where shortening would be wrong
+    rather than merely ugly are aliased explicitly."""
+    assert shorten_team_name("University of California, Los Angeles") == "UCLA"
+    assert shorten_team_name("University of California Los Angeles") == "UCLA"
+    assert shorten_team_name("University of Southern California") == "USC"
+    assert shorten_team_name("University of Illinois Urbana-Champaign") == "Illinois"
+    assert shorten_team_name("University of Wisconsin-Madison") == "Wisconsin"
+    assert shorten_team_name("Pennsylvania State University") == "Penn State"
+
+
+def test_aliases_are_matched_regardless_of_case():
+    assert shorten_team_name("UNIVERSITY OF SOUTHERN CALIFORNIA") == "USC"
+
+
+
 def test_format_match_day_and_bad_input():
     assert format_match_day("11/08/2025") == "Nov 8"
     assert format_match_day("") == ""
@@ -73,7 +91,7 @@ def test_match_label_includes_the_date_because_opponents_repeat():
     second = MatchInfo("b.dvw", "Pennsylvania State University", "University of Maryland",
                         "11/23/2025", "University of Maryland")
     assert first.label != second.label
-    assert first.label == "Pennsylvania State (Oct 5)"
+    assert first.label == "Penn State (Oct 5)"  # aliased; see shorten_team_name
     assert second.opponent == "Pennsylvania State University"
 
 
@@ -272,3 +290,20 @@ def test_scoping_to_a_set_does_not_change_the_unscoped_answer(maryland_source):
     evaluate_metric(kills.spec, scope_source(maryland_source, {"Set": ["Set 2"]}), tree)
     after = evaluate_metric(kills.spec, maryland_source, tree)
     pd.testing.assert_frame_equal(before, after)
+
+
+@requires_corpus
+def test_every_match_label_is_opponent_plus_date_and_unique(maryland_source):
+    """The date is not decoration: three opponents are played twice, and
+    two matches sharing a Game axis value would silently add their stats
+    together."""
+    labels = maryland_source.game_labels()
+    assert len(labels) == len(set(labels)) == 18
+    assert all(label.endswith(")") and " (" in label for label in labels), labels
+    assert not any("Maryland" in label for label in labels), (
+        "a label names the OPPONENT, never the team of interest"
+    )
+    # The two Penn State matches differ only by date, which is the case
+    # that makes the date load-bearing.
+    penn = [label for label in labels if label.startswith("Penn State")]
+    assert len(penn) == 2 and penn[0] != penn[1]
