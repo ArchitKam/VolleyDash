@@ -5,5 +5,3 @@ streamlit-agraph
 openai
 requests
 pytest
-pydatavolley
-charset-normalizer

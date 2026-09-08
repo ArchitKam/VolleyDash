@@ -31,12 +31,10 @@ Contract (unchanged from the app's existing session-init logic):
 
 import base64
 import copy
-import glob
 import io
 import json
 import os
 import re
-import tempfile
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -62,21 +60,7 @@ class GameInfo:
 
 
 def _parse_opponent(filename: str) -> str:
-    """
-    "01 Nat vs Vegas Aces - Stats.csv" -> "Vegas Aces".
-
-    Exports arrive with either spaces or underscores as the word
-    separator depending on how they were downloaded, so underscores are
-    normalised to spaces before the patterns run. Without that, every
-    underscore-named file failed BOTH patterns and fell through to the
-    whole stem -- which is what put "01_Nat_vs_Victory_15_Eite_-_Stats"
-    on the Game axis instead of "Victory 15 Eite".
-
-    A file that matches nothing still returns its stem rather than "":
-    an unparseable name is better on the axis than a blank label, and it
-    is visibly wrong rather than quietly missing.
-    """
-    stem = os.path.splitext(filename)[0].replace("_", " ")
+    stem = os.path.splitext(filename)[0]
     parts = _VS_SPLIT_RE.split(stem, maxsplit=1)
     tail = parts[1] if len(parts) == 2 else stem
     return _STATS_SUFFIX_RE.sub("", tail).strip()
@@ -103,50 +87,6 @@ def _require_secret(name: str) -> str:
 
 def _headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-
-
-def _raw_headers(token: str) -> dict:
-    """The Contents API inlines file bytes as base64 ONLY below 1 MB.
-    At or above that it answers with "encoding": "none" and an empty
-    content field -- a 200 that contains no file. This Accept asks for
-    the bytes themselves, which has no size limit."""
-    return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3.raw"}
-
-
-def _fetch_file_bytes(repo: str, token: str, path: str, timeout: int = 30) -> bytes:
-    """
-    One file out of the private repo.
-
-    Keeps the inline base64 path for small files -- unchanged, because
-    that is what every existing caller and test exercises -- and falls
-    back to a raw refetch only when GitHub says it could not inline the
-    content. Detecting the case rather than always using raw means the
-    working path stays byte-identical and the fix costs one extra
-    request only on the files that were previously broken.
-    """
-    url = _contents_url(repo, path)
-    response = requests.get(url, headers=_headers(token), timeout=timeout)
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Couldn't fetch {path} in {repo} ({response.status_code}): {response.text[:300]}"
-        )
-
-    payload = response.json()
-    content = payload.get("content")
-    # Default "base64" when the field is absent: that is what the API
-    # sends for every inlined file, and assuming it here keeps this
-    # exactly as faithful to the previous one-line implementation as it
-    # can be. An over-1MB file arrives with empty content (and
-    # "encoding": "none"), which is the only case that falls through.
-    if content and payload.get("encoding", "base64") == "base64":
-        return base64.b64decode(content)
-
-    raw = requests.get(url, headers=_raw_headers(token), timeout=timeout)
-    if raw.status_code != 200:
-        raise RuntimeError(
-            f"Couldn't fetch {path} in {repo} as raw ({raw.status_code}): {raw.text[:300]}"
-        )
-    return raw.content
 
 
 def _contents_url(repo: str, path: str) -> str:
@@ -231,8 +171,7 @@ def _tree_from_json_dict(data: dict) -> KnowledgeTree:
     return tree
 
 
-def save_committed_tree(tree: KnowledgeTree, path: str = None,
-                         serializer=None) -> None:
+def save_committed_tree(tree: KnowledgeTree) -> None:
     """
     Two-step Contents API update: GET the file's current sha, then PUT
     the new content with that sha (required to update rather than
@@ -241,45 +180,29 @@ def save_committed_tree(tree: KnowledgeTree, path: str = None,
     survive a redeploy/restart even though it's already merged into the
     in-memory tree for this session.
     """
-    # `path`/`serializer` let a second knowledge base (the event-grain
-    # one) persist to the same private repo through the same two-step
-    # update, without this module learning what an event spec is.
-    path = path or TREE_JSON_PATH
-    serializer = serializer or tree_to_json_dict
-
     repo = _require_secret("GITHUB_DATA_REPO")
     token = _require_secret("GITHUB_DATA_TOKEN")
-    url = _contents_url(repo, path)
+    url = _contents_url(repo, TREE_JSON_PATH)
     headers = _headers(token)
 
     get_response = requests.get(url, headers=headers, timeout=15)
-    if get_response.status_code == 404:
-        # First save of a knowledge base that does not exist yet. The
-        # Contents API creates a file when the PUT carries NO sha, and
-        # rejects it when the sha is wrong -- so "no sha" is the create
-        # case, not a missing precondition. Distinguishing this from a
-        # real failure matters because a second knowledge base always
-        # starts here.
-        sha = None
-    elif get_response.status_code != 200:
+    if get_response.status_code != 200:
         raise RuntimeError(
-            f"Couldn't fetch current sha for {path} in {repo} "
+            f"Couldn't fetch current sha for {TREE_JSON_PATH} in {repo} "
             f"({get_response.status_code}): {get_response.text[:300]}"
         )
-    else:
-        sha = get_response.json()["sha"]
+    sha = get_response.json()["sha"]
 
-    content = json.dumps(serializer(tree), indent=2)
+    content = json.dumps(tree_to_json_dict(tree), indent=2)
     put_payload = {
-        "message": f"{'Update' if sha else 'Create'} {path} via dashboard",
+        "message": "Update recruiting_kb_data.json via dashboard",
         "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+        "sha": sha,
     }
-    if sha is not None:
-        put_payload["sha"] = sha
     put_response = requests.put(url, headers=headers, json=put_payload, timeout=15)
     if put_response.status_code not in (200, 201):
         raise RuntimeError(
-            f"GitHub push failed for {path} in {repo} "
+            f"GitHub push failed for {TREE_JSON_PATH} in {repo} "
             f"({put_response.status_code}): {put_response.text[:300]}"
         )
 
@@ -329,151 +252,8 @@ def get_games() -> List[GameInfo]:
 def load_game_df(path: str) -> pd.DataFrame:
     repo = _require_secret("GITHUB_DATA_REPO")
     token = _require_secret("GITHUB_DATA_TOKEN")
-    content = _fetch_file_bytes(repo, token, path, timeout=15).decode("utf-8")
-    return pd.read_csv(io.StringIO(content))
-
-
-# ──────────────────────────────────────────────────────────────
-# DATAVOLLEY (.dvw) MATCH FILES
-# ──────────────────────────────────────────────────────────────
-# Same private repo, separate folder. The .dvw files have to live here
-# rather than on local disk because Streamlit Community Cloud deploys
-# the PUBLIC code repo and has no access to any local corpus -- a path
-# like /fs/... exists only on the machine it was written on.
-#
-# pydatavolley reads a PATH, not bytes, so fetched files are written to
-# a cache directory and their local paths returned. The cache is keyed
-# by the repo-relative path, so a match is downloaded once per session.
-
-DVW_DIR_PATH = "dvw"
-
-#: Set this to a directory of .dvw files to skip the network entirely.
-#: Intended for running on a machine that already has the corpus: same
-#: Source, same results, no round trip.
-DVW_LOCAL_DIR_ENV = "VOLLEY_DVW_DIR"
-
-
-def _dvw_cache_dir() -> str:
-    directory = os.path.join(tempfile.gettempdir(), "volleydash_dvw_cache")
-    os.makedirs(directory, exist_ok=True)
-    return directory
-
-
-def local_dvw_dir() -> Optional[str]:
-    """The local corpus directory, if one is configured AND actually has
-    .dvw files in it. Returns None otherwise so callers fall through to
-    the repo rather than failing on a stale environment variable."""
-    directory = os.environ.get(DVW_LOCAL_DIR_ENV)
-    if directory and os.path.isdir(directory) and glob.glob(os.path.join(directory, "*.dvw")):
-        return directory
-    return None
-
-
-@st.cache_data(show_spinner=False)
-def list_dvw_files() -> List[str]:
-    """Repo-relative paths of every .dvw in the private repo's dvw/
-    folder. Empty list when the folder does not exist yet -- that is a
-    "no matches uploaded" state, not an error."""
-    repo = _require_secret("GITHUB_DATA_REPO")
-    token = _require_secret("GITHUB_DATA_TOKEN")
-    response = requests.get(_contents_url(repo, DVW_DIR_PATH), headers=_headers(token), timeout=15)
-    if response.status_code == 404:
-        return []
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Couldn't list {DVW_DIR_PATH} in {repo} ({response.status_code}): {response.text[:300]}"
-        )
-    return sorted(
-        entry["path"] for entry in response.json()
-        if entry.get("type") == "file" and entry["name"].lower().endswith(".dvw")
-    )
-
-
-@st.cache_data(show_spinner=False)
-def fetch_dvw_file(path: str) -> str:
-    """One .dvw from the repo, written to the cache; returns its local
-    path. Cached on `path`, so re-asking within a session is free."""
-    repo = _require_secret("GITHUB_DATA_REPO")
-    token = _require_secret("GITHUB_DATA_TOKEN")
-    payload = _fetch_file_bytes(repo, token, path)
-
-    local_path = os.path.join(_dvw_cache_dir(), os.path.basename(path))
-    with open(local_path, "wb") as handle:
-        handle.write(payload)
-    return local_path
-
-
-def dvw_paths() -> List[str]:
-    """
-    Local paths to every available match file, whichever way they got
-    here. The ONE function the app calls: whether the corpus came off
-    disk or out of the private repo is exactly the kind of thing the
-    rest of the system should not know.
-    """
-    directory = local_dvw_dir()
-    if directory is not None:
-        return sorted(glob.glob(os.path.join(directory, "*.dvw")))
-    return [fetch_dvw_file(path) for path in list_dvw_files()]
-
-
-@st.cache_data(show_spinner=False)
-def load_json_file(path: str) -> Optional[dict]:
-    """
-    Any JSON file out of the private repo, or None if it isn't there.
-
-    None for "absent" and an exception for "present but unreachable":
-    a caller seeding a fresh knowledge base needs to know the difference
-    between "nothing saved yet" and "saved, but I couldn't read it" --
-    conflating them silently discards someone's committed work.
-    """
-    repo = _require_secret("GITHUB_DATA_REPO")
-    token = _require_secret("GITHUB_DATA_TOKEN")
     response = requests.get(_contents_url(repo, path), headers=_headers(token), timeout=15)
-    if response.status_code == 404:
-        return None
     if response.status_code != 200:
-        raise RuntimeError(
-            f"Couldn't fetch {path} in {repo} ({response.status_code}): {response.text[:300]}"
-        )
-    payload = response.json()
-    content = payload.get("content")
-    if content and payload.get("encoding", "base64") == "base64":
-        return json.loads(base64.b64decode(content).decode("utf-8"))
-    return json.loads(_fetch_file_bytes(repo, token, path).decode("utf-8"))
-
-
-def put_file_bytes(repo: str, token: str, path: str, payload: bytes,
-                    message: str, timeout: int = 60) -> str:
-    """
-    Create or replace one file in the private repo.
-
-    Returns "created" or "updated" so a caller can report what actually
-    happened rather than assume. Same create-vs-update rule as
-    save_committed_tree: a PUT with no sha creates, a PUT with the
-    current sha replaces, and a PUT with a STALE sha is rejected by
-    GitHub rather than silently clobbering someone else's write.
-    """
-    url = _contents_url(repo, path)
-    headers = _headers(token)
-
-    existing = requests.get(url, headers=headers, timeout=timeout)
-    if existing.status_code == 200:
-        sha = existing.json()["sha"]
-    elif existing.status_code == 404:
-        sha = None
-    else:
-        raise RuntimeError(
-            f"Couldn't check {path} in {repo} ({existing.status_code}): {existing.text[:300]}"
-        )
-
-    body = {"message": message,
-            "content": base64.b64encode(payload).decode("ascii")}
-    if sha is not None:
-        body["sha"] = sha
-
-    response = requests.put(url, headers=headers, json=body, timeout=timeout)
-    if response.status_code not in (200, 201):
-        raise RuntimeError(
-            f"Upload failed for {path} in {repo} ({response.status_code}): {response.text[:300]}"
-        )
-    return "updated" if sha is not None else "created"
+        raise RuntimeError(f"Couldn't fetch {path} in {repo} ({response.status_code}): {response.text[:300]}")
+    content = base64.b64decode(response.json()["content"]).decode("utf-8")
+    return pd.read_csv(io.StringIO(content))
