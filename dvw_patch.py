@@ -363,6 +363,57 @@ def _patch_numpy_nan_alias() -> bool:
     return True
 
 
+def _patch_index_writeable() -> bool:
+    """
+    DEFECT 4: read_dv._read_data renames the rotation columns by
+    MUTATING the backing array in place --
+
+        plays.columns.values[14:20] = [f"home_p{i+1}" ...]
+
+    -- and newer pandas marks Index.values read-only, so that raises
+    "assignment destination is read-only" and NO file can be read at
+    all. It is the first thing _read_data does with the frame, so the
+    failure is total rather than partial.
+
+    Returning a copy would be worse than the crash: the assignment
+    would succeed against the copy, the columns would keep their
+    original names, and every later lookup of "home_p1" would fail
+    somewhere far away from the cause. So the flag is flipped back on
+    the SAME array, which is what the older pandas this library was
+    written against handed out.
+
+    A no-op wherever Index.values is already writeable.
+    """
+    try:
+        import pandas as pd
+
+        descriptor = pd.Index.__dict__.get("values")
+        if not isinstance(descriptor, property) or getattr(descriptor, "_dvw_patched", False):
+            return False
+
+        original = descriptor.fget
+
+        def values(self):
+            array = original(self)
+            if getattr(array, "flags", None) is not None and not array.flags.writeable:
+                try:
+                    array.flags.writeable = True
+                except ValueError:
+                    # Genuinely immutable buffer; leave it alone rather
+                    # than hand back a copy that silently loses writes.
+                    pass
+            return array
+
+        patched = property(values, descriptor.fset, descriptor.fdel, descriptor.__doc__)
+        patched._dvw_patched = True
+        pd.Index.values = patched
+        return True
+    except Exception:
+        # Never let a compatibility shim be the reason the app cannot
+        # start; the original error is more useful than this one.
+        return False
+
+
 def apply_patches() -> dict:
     """
     Idempotent. Returns what was actually patched, so a caller (or a
@@ -373,7 +424,8 @@ def apply_patches() -> dict:
     would leave the copy the parser actually calls untouched, so both
     are rebound.
     """
-    applied = {"numpy_nan_alias": _patch_numpy_nan_alias()}
+    applied = {"numpy_nan_alias": _patch_numpy_nan_alias(),
+               "index_writeable": _patch_index_writeable()}
 
     from datavolley import helpers as dv_helpers
     from datavolley import read_dv as dv_read

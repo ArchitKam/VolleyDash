@@ -195,7 +195,16 @@ def build_player_analysis(team: Optional[str] = None) -> Workspace:
         # Whose season is this? Without an answer, MatchInfo.opponent
         # falls back to the visiting team, so every away match gets
         # labelled with the scouted team's own name.
-        team = DvwSource(paths).default_team()
+        #
+        # Guarded because this is the first thing that actually PARSES a
+        # file, so any parser incompatibility surfaces here -- and a
+        # parser problem must disable one workspace, never take down the
+        # whole app and the recruiting side with it.
+        try:
+            team = DvwSource(paths).default_team()
+        except Exception as error:
+            paths = []
+            warnings.append(f"Couldn't read the match files: {type(error).__name__}: {error}")
 
     source = DvwSource(paths, team_of_interest=team)
 
@@ -207,10 +216,15 @@ def build_player_analysis(team: Optional[str] = None) -> Workspace:
     tree = _load_dvw_tree(source, warnings)
     if tree is None:
         tree, _ = seed_dvw_tree(source.schema)
-        try:
-            _save(tree)
-        except RuntimeError as error:
-            warnings.append(f"Couldn't save the seeded tree: {error}")
+        # Only PERSIST a seeded tree when it was seeded against real
+        # matches. With no readable files every primitive fails
+        # validation, so the seed is empty -- saving that would
+        # overwrite a good knowledge base with nothing.
+        if paths:
+            try:
+                _save(tree)
+            except RuntimeError as error:
+                warnings.append(f"Couldn't save the seeded tree: {error}")
 
     return Workspace(
         key=PLAYER_ANALYSIS,
