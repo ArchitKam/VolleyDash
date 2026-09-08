@@ -254,6 +254,19 @@ def render_leaf_panel(tree: KnowledgeTree, leaf: Node, worked_example_df: Option
     path = " / ".join(tree.find_path(leaf.node_id, tree=tree.committed))
     st.markdown(f"#### 📊 {leaf.label}")
     st.caption(f"Path: {path}  ·  Authored by: {leaf.authored_by}")
+
+    # A leaf without a spec is a metric whose definition could not be
+    # rebuilt against the CURRENT source -- an event metric loaded into
+    # the CSV world, or one naming a (skill, code) these matches never
+    # contain. Say so and stop, rather than raising: one unusable node
+    # must not take down the whole Knowledge Base tab.
+    if leaf.spec is None:
+        st.warning(
+            "This metric has no definition that the loaded data can evaluate. "
+            "It was saved against different matches, or against the other data source."
+        )
+        return
+
     st.write(f"**Description:** {leaf.spec.description}")
 
     if worked_example_df is not None:
