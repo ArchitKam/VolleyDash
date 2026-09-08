@@ -41,7 +41,6 @@ from recruiting_encoding import (
     EncodingAssignment, default_encoding, reconcile_encoding, resolve_clicked_point,
     set_game_order, slot_options, render as render_encoded_panels,
 )
-import source_dvw
 import workspace
 
 try:
@@ -398,6 +397,18 @@ def _build_workspace(key: str, team: Optional[str]):
     return workspace.build_recruiting()
 
 
+def _shorten_team(name: str) -> str:
+    """Imported lazily: the .dvw stack has a hard dependency bound and
+    importing it may fail, which must not matter to a workspace that
+    never touches it. Falls back to the full name."""
+    try:
+        from source_dvw import shorten_team_name
+
+        return shorten_team_name(name)
+    except Exception:
+        return name
+
+
 def _switch_workspace() -> None:
     """
     Everything scoped to the OLD world has to go.
@@ -454,6 +465,14 @@ if st.session_state.qa_pending_query is not None:
     st.session_state.qa_pending_query = None
     st.session_state.qa_trigger = True
 
+# Computed once, before anything reads it: a workspace whose dependencies
+# cannot be imported must not appear in the picker, and a stale
+# workspace_key pointing at it must fall back rather than crash.
+_AVAILABLE_KEYS = workspace.available_keys()
+_DVW_REASON = workspace.dvw_unavailable_reason()
+if st.session_state.workspace_key not in _AVAILABLE_KEYS:
+    st.session_state.workspace_key = _AVAILABLE_KEYS[0]
+
 ws = current_workspace()
 tree = ws.tree
 source = ws.source
@@ -477,7 +496,7 @@ col_source, col_team, col_caption = st.columns([2, 2, 4] if _teams else [2, 0.01
 with col_source:
     st.selectbox(
         "Data source",
-        list(workspace.LABELS),
+        _AVAILABLE_KEYS,
         format_func=lambda key: workspace.LABELS[key],
         key="workspace_key",
         on_change=_switch_workspace,
@@ -493,7 +512,7 @@ if _teams:
         st.selectbox(
             "Team", _teams, index=_teams.index(ws.team) if ws.team in _teams else 0,
             key="team_of_interest", on_change=_switch_workspace,
-            format_func=source_dvw.shorten_team_name,
+            format_func=_shorten_team,
             help="Scouting files contain both teams. This picks whose players "
                  "are analysed; the other side becomes the opponent.",
         )
@@ -504,6 +523,12 @@ with col_caption:
 
 for _warning in ws.warnings:
     st.warning(_warning)
+
+if _DVW_REASON:
+    st.info(
+        "Play-by-play (.dvw) analysis is unavailable in this deployment, so only "
+        f"the recruiting source is listed. Reason: {_DVW_REASON}"
+    )
 
 if st.session_state.flash_message:
     level, text = st.session_state.flash_message

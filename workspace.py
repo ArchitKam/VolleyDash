@@ -37,7 +37,6 @@ from recruiting_tree import KnowledgeTree, seed_recruiting_tree
 from seed_dvw import seed_dvw_tree
 from source import SET_AXIS, Source
 from source_csv import CsvSource
-from source_dvw import DvwSource
 
 #: Where each workspace's committed tree lives inside the private repo.
 RECRUITING_TREE_PATH = data_store.TREE_JSON_PATH
@@ -45,6 +44,32 @@ DVW_TREE_PATH = "volley_kb_data.json"
 
 RECRUITING = "recruiting"
 PLAYER_ANALYSIS = "player_analysis"
+
+
+def dvw_unavailable_reason() -> Optional[str]:
+    """
+    Why the play-by-play workspace cannot be offered, or None if it can.
+
+    The DVW stack has a hard dependency bound (pydatavolley predates
+    pandas 3 and numpy 2), so importing it is allowed to FAIL. Asking
+    first -- rather than importing at module scope and hoping -- is what
+    keeps a .dvw dependency problem from taking down the recruiting
+    dashboard, which needs none of it.
+    """
+    try:
+        import source_dvw  # noqa: F401
+    except Exception as error:
+        return f"{type(error).__name__}: {error}"
+    return None
+
+
+def available_keys() -> List[str]:
+    """Workspaces that can actually be built. Recruiting is always
+    available; it depends on none of the .dvw stack."""
+    keys = [RECRUITING]
+    if dvw_unavailable_reason() is None:
+        keys.append(PLAYER_ANALYSIS)
+    return keys
 
 
 @dataclass
@@ -176,6 +201,8 @@ def build_player_analysis(team: Optional[str] = None) -> Workspace:
     both on a machine that already has the files and on Streamlit Cloud,
     which has neither the files nor a writable disk.
     """
+    from source_dvw import DvwSource
+
     warnings: List[str] = []
 
     try:
@@ -238,7 +265,7 @@ def build_player_analysis(team: Optional[str] = None) -> Workspace:
     )
 
 
-def _load_dvw_tree(source: DvwSource, warnings: List[str]) -> Optional[KnowledgeTree]:
+def _load_dvw_tree(source: "Source", warnings: List[str]) -> Optional[KnowledgeTree]:
     """
     Committed tree out of the private repo, validated against the schema
     the loaded matches actually have.

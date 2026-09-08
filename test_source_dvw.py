@@ -15,6 +15,19 @@ import os
 import pandas as pd
 import pytest
 
+# The .dvw stack has a hard dependency bound (pydatavolley predates
+# pandas 3 and numpy 2), so importing it is allowed to fail. Skipping at
+# MODULE level rather than letting the import raise matters: a collection
+# error aborts the whole session, which would take the recruiting tests
+# down with it on an unsupported stack.
+try:
+    import dvw_patch  # noqa: F401
+except Exception as _dependency_error:  # pragma: no cover
+    pytest.skip(
+        f"the .dvw stack is unavailable here: {_dependency_error}",
+        allow_module_level=True,
+    )
+
 from source import FieldRole, Grain
 from source_dvw import (
     DvwSource, MatchInfo, discover_matches, format_match_day, player_label, shorten_team_name,

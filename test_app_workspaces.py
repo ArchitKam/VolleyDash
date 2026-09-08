@@ -178,3 +178,49 @@ def test_each_workspace_has_its_own_knowledge_base():
     event_only = labels(events) - labels(recruiting)
     assert event_only, "the event tree must contain metrics the CSV tree cannot express"
     assert events.supports_sets and not recruiting.supports_sets
+
+
+# ── degrading instead of dying ─────────────────────────────────
+
+def test_recruiting_is_always_available():
+    """It depends on none of the .dvw stack, so no .dvw dependency
+    problem may ever remove it."""
+    import workspace
+
+    assert workspace.RECRUITING in workspace.available_keys()
+
+
+def test_a_dvw_import_failure_hides_that_workspace_instead_of_killing_the_app(monkeypatch):
+    """
+    The failure that took down a live demo: dvw_patch raised at import,
+    app.py imported source_dvw at module scope, and the WHOLE app died
+    -- recruiting included, which needs none of it.
+
+    Availability is now asked for rather than assumed, so an unsupported
+    pandas removes one entry from a dropdown.
+    """
+    import builtins
+
+    import workspace
+
+    real_import = builtins.__import__
+
+    def _fail_on_source_dvw(name, *args, **kwargs):
+        if name == "source_dvw":
+            raise RuntimeError("pandas 3.0.3 is too new for pydatavolley")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(__import__("sys").modules, "source_dvw", raising=False)
+    monkeypatch.setattr(builtins, "__import__", _fail_on_source_dvw)
+
+    reason = workspace.dvw_unavailable_reason()
+    assert reason and "too new" in reason
+    assert workspace.available_keys() == [workspace.RECRUITING]
+
+
+def test_when_dvw_works_both_workspaces_are_offered():
+    import workspace
+
+    if workspace.dvw_unavailable_reason() is not None:
+        pytest.skip("the .dvw stack is unavailable in this environment")
+    assert workspace.available_keys() == [workspace.RECRUITING, workspace.PLAYER_ANALYSIS]

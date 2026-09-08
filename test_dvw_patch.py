@@ -18,7 +18,19 @@ import re
 import pandas as pd
 import pytest
 
-import dvw_patch
+# The .dvw stack has a hard dependency bound (pydatavolley predates
+# pandas 3 and numpy 2), so importing it is allowed to fail. Skipping at
+# MODULE level rather than letting the import raise matters: a collection
+# error aborts the whole session, which would take the recruiting tests
+# down with it on an unsupported stack.
+try:
+    import dvw_patch  # noqa: F401
+except Exception as _dependency_error:  # pragma: no cover
+    pytest.skip(
+        f"the .dvw stack is unavailable here: {_dependency_error}",
+        allow_module_level=True,
+    )
+
 from dvw_patch import SET_COLUMNS, get_set
 
 from store_dvw import DVW_SEARCH_DIRS as DVW_DIRS
@@ -298,3 +310,56 @@ def test_matches_upstream_scores_on_every_file_upstream_could_read():
         )
         compared += 1
     assert compared > 0, "expected at least one file upstream could read"
+
+
+# ── dependency bounds ──────────────────────────────────────────
+
+class TestDependencyBounds:
+    """
+    pydatavolley predates pandas 3 (Arrow-backed strings) and numpy 2
+    (stricter dtype promotion). Both fail deep inside the parser with
+    messages that name neither cause:
+
+        pandas 3 -> ValueError: assignment destination is read-only
+        numpy 2  -> DTypePromotionError: ... StrDType ... _PyFloatDType
+
+    Neither is patchable from outside -- pandas 3 hands out an
+    ArrowStringArray, which has no writeable flag to flip -- so the
+    bound is stated and checked instead of worked around.
+    """
+
+    def test_the_installed_stack_satisfies_the_bound(self):
+        assert dvw_patch.check_dependency_versions(strict=False) == []
+
+    def test_too_new_pandas_is_reported_with_the_reason_and_the_fix(self, monkeypatch):
+        import pandas as pd
+
+        monkeypatch.setattr(pd, "__version__", "3.0.3")
+        problems = dvw_patch.check_dependency_versions(strict=False)
+        assert len(problems) == 1
+        assert "pandas 3.0.3 is too new" in problems[0]
+        assert "Arrow" in problems[0], "the message must say WHY, not just that it is too new"
+
+    def test_too_new_numpy_is_reported_too(self, monkeypatch):
+        import numpy as np
+
+        monkeypatch.setattr(np, "__version__", "2.4.6")
+        problems = dvw_patch.check_dependency_versions(strict=False)
+        assert len(problems) == 1 and "numpy 2.4.6 is too new" in problems[0]
+
+    def test_strict_mode_raises_and_names_the_streamlit_cloud_step(self, monkeypatch):
+        import pandas as pd
+
+        monkeypatch.setattr(pd, "__version__", "3.0.3")
+        with pytest.raises(dvw_patch.IncompatibleDependencyError) as caught:
+            dvw_patch.check_dependency_versions()
+        message = str(caught.value)
+        assert "requirements.txt" in message
+        assert "3.12" in message, "the operator needs the actionable step, not just the diagnosis"
+
+    def test_an_unparseable_version_does_not_trip_the_bound(self, monkeypatch):
+        """A dev build like "3.0.0.dev0+abc" must not be read as major -1
+        and silently pass, nor crash the check."""
+        assert dvw_patch._major("2.3.3") == 2
+        assert dvw_patch._major("3.0.0.dev0") == 3
+        assert dvw_patch._major("bogus") == -1

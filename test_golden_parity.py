@@ -187,13 +187,25 @@ CASES: Dict[str, dict] = {
 # DETERMINISTIC SERIALISATION
 # ──────────────────────────────────────────────────────────────
 
+#: One token for "no value", whatever the pandas version spells it as.
+#: pandas 2 hands back float("nan") here and pandas 3 hands back None;
+#: both mean the metric could not be computed for that row, and the Note
+#: column carries the reason either way. Collapsing them keeps the lock
+#: comparing BEHAVIOUR rather than the dependency's null representation
+#: -- and it still separates "missing" from every real number, which is
+#: the distinction the lock exists to protect.
+MISSING = "NaN"
+
+
 def _round(value: Any) -> Any:
     """Floats are rounded to 6dp so the lock survives platform-level
     float formatting without loosening far enough to hide a real change."""
+    if value is None:
+        return MISSING
     if isinstance(value, float):
-        return "NaN" if math.isnan(value) else round(value, 6)
-    if pd.isna(value) if not isinstance(value, (list, dict, str)) else False:
-        return None
+        return MISSING if math.isnan(value) else round(value, 6)
+    if not isinstance(value, (list, dict, str)) and pd.isna(value):
+        return MISSING
     return value
 
 

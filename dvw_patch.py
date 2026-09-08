@@ -363,55 +363,70 @@ def _patch_numpy_nan_alias() -> bool:
     return True
 
 
-def _patch_index_writeable() -> bool:
-    """
-    DEFECT 4: read_dv._read_data renames the rotation columns by
-    MUTATING the backing array in place --
+#: pydatavolley predates both pandas 3 (which moved string columns to
+#: Arrow backing) and numpy 2 (which tightened dtype promotion). Neither
+#: is patchable from out here, and both fail deep inside the library with
+#: errors that say nothing about the cause:
+#:
+#:   pandas >= 3  ->  ValueError: assignment destination is read-only
+#:                    (read_dv renames columns by mutating
+#:                    plays.columns.values in place; that array is now an
+#:                    ArrowStringArray, which has no writeable flag at
+#:                    all -- there is nothing to flip)
+#:   numpy  >= 2  ->  DTypePromotionError: ... StrDType ... _PyFloatDType
+#:
+#: So this is a REQUIREMENT, not a shim. Checked at import and reported
+#: in one line, because a stated version bound is worth more than a
+#: traceback 140 frames into someone else's parser.
+MAX_PANDAS_MAJOR = 2
+MAX_NUMPY_MAJOR = 1
 
-        plays.columns.values[14:20] = [f"home_p{i+1}" ...]
 
-    -- and newer pandas marks Index.values read-only, so that raises
-    "assignment destination is read-only" and NO file can be read at
-    all. It is the first thing _read_data does with the frame, so the
-    failure is total rather than partial.
+class IncompatibleDependencyError(RuntimeError):
+    """Raised at import when the installed pandas/numpy cannot drive
+    pydatavolley. Deliberately fatal: every alternative is a wrong
+    answer or a mystery crash later."""
 
-    Returning a copy would be worse than the crash: the assignment
-    would succeed against the copy, the columns would keep their
-    original names, and every later lookup of "home_p1" would fail
-    somewhere far away from the cause. So the flag is flipped back on
-    the SAME array, which is what the older pandas this library was
-    written against handed out.
 
-    A no-op wherever Index.values is already writeable.
-    """
+def _major(version: str) -> int:
     try:
-        import pandas as pd
+        return int(str(version).split(".")[0])
+    except (TypeError, ValueError):
+        return -1
 
-        descriptor = pd.Index.__dict__.get("values")
-        if not isinstance(descriptor, property) or getattr(descriptor, "_dvw_patched", False):
-            return False
 
-        original = descriptor.fget
+def check_dependency_versions(strict: bool = True) -> List[str]:
+    """
+    Returns the problems found; raises on them when `strict`.
 
-        def values(self):
-            array = original(self)
-            if getattr(array, "flags", None) is not None and not array.flags.writeable:
-                try:
-                    array.flags.writeable = True
-                except ValueError:
-                    # Genuinely immutable buffer; leave it alone rather
-                    # than hand back a copy that silently loses writes.
-                    pass
-            return array
+    Separated from raising so a caller can render the message in a UI
+    instead of a stack trace, and so the bound itself is testable
+    without installing an unsupported pandas.
+    """
+    import numpy
+    import pandas
 
-        patched = property(values, descriptor.fset, descriptor.fdel, descriptor.__doc__)
-        patched._dvw_patched = True
-        pd.Index.values = patched
-        return True
-    except Exception:
-        # Never let a compatibility shim be the reason the app cannot
-        # start; the original error is more useful than this one.
-        return False
+    problems = []
+    if _major(pandas.__version__) > MAX_PANDAS_MAJOR:
+        problems.append(
+            f"pandas {pandas.__version__} is too new for pydatavolley "
+            f"(needs pandas<{MAX_PANDAS_MAJOR + 1}): pandas 3 moved string columns to "
+            "Arrow backing, and the parser renames columns by mutating that array "
+            "in place."
+        )
+    if _major(numpy.__version__) > MAX_NUMPY_MAJOR:
+        problems.append(
+            f"numpy {numpy.__version__} is too new for pydatavolley "
+            f"(needs numpy<{MAX_NUMPY_MAJOR + 1}): numpy 2 refuses the "
+            "string/float dtype promotion the parser relies on."
+        )
+    if problems and strict:
+        raise IncompatibleDependencyError(
+            " ".join(problems)
+            + " Pin them in requirements.txt, and on Streamlit Cloud set the Python "
+              "version to 3.12 so wheels exist for those pins."
+        )
+    return problems
 
 
 def apply_patches() -> dict:
@@ -424,8 +439,8 @@ def apply_patches() -> dict:
     would leave the copy the parser actually calls untouched, so both
     are rebound.
     """
-    applied = {"numpy_nan_alias": _patch_numpy_nan_alias(),
-               "index_writeable": _patch_index_writeable()}
+    check_dependency_versions()
+    applied = {"numpy_nan_alias": _patch_numpy_nan_alias()}
 
     from datavolley import helpers as dv_helpers
     from datavolley import read_dv as dv_read
