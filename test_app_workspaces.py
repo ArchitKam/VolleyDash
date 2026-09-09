@@ -224,3 +224,49 @@ def test_when_dvw_works_both_workspaces_are_offered():
     if workspace.dvw_unavailable_reason() is not None:
         pytest.skip("the .dvw stack is unavailable in this environment")
     assert workspace.available_keys() == [workspace.RECRUITING, workspace.PLAYER_ANALYSIS]
+
+
+@requires_secrets
+@requires_corpus
+def test_the_knowledge_base_tab_names_which_knowledge_base_it_is():
+    """
+    The two trees deliberately share branch NAMES so the router's
+    synonyms resolve a category question in either world -- which makes
+    them look nearly identical on screen. The tab must therefore SAY
+    which one it is, or "am I editing the right one" is unanswerable
+    without opening a metric and reading its definition.
+    """
+    seen = {}
+    for key in ("recruiting", "player_analysis"):
+        at = _run(key)
+        header = next(h.value for h in at.header if "Metrics Tree" in h.value)
+        caption = next(c.value for c in at.caption if "committed metrics" in c.value)
+        seen[key] = (header, caption)
+
+    assert "Recruiting" in seen["recruiting"][0]
+    assert "Player analysis" in seen["player_analysis"][0]
+    assert seen["recruiting"][0] != seen["player_analysis"][0]
+
+    # The file is named too, so the claim is checkable against the repo.
+    assert "recruiting_kb_data.json" in seen["recruiting"][1]
+    assert "volley_kb_data.json" in seen["player_analysis"][1]
+
+
+@requires_secrets
+@requires_corpus
+def test_the_two_trees_really_are_different_trees():
+    """Guards the thing the label asserts: if these ever became the same
+    object, the label would be a comforting lie."""
+    import workspace
+    from recruiting_tree import NodeKind
+
+    recruiting = workspace.build_recruiting()
+    events = workspace.build_player_analysis()
+
+    def leaves(ws):
+        return {n.label for n in ws.tree.committed.values() if n.kind == NodeKind.LEAF}
+
+    assert recruiting.tree is not events.tree
+    assert leaves(recruiting) != leaves(events)
+    assert "Freeballs" in leaves(events), "an event-only metric"
+    assert "Freeballs" not in leaves(recruiting)

@@ -854,8 +854,30 @@ with tab_qa:
 # ──────────────────────────────────────────────────────────────
 
 with tab_kb:
-    st.header("Current Metrics Tree (committed)")
-    st.caption("Persisted to the private VolleyData repo — updates on merge.")
+    st.header(f"Current Metrics Tree — {workspace.LABELS[ws.key]}")
+
+    # WHICH knowledge base this is, stated rather than implied. The two
+    # trees deliberately share branch NAMES ("Attack", "Serve",
+    # "Receive"...) so the router's synonyms resolve a category question
+    # in either world -- which means they look nearly identical on
+    # screen. Naming the source, the file and the metric count is what
+    # makes "am I editing the right one" answerable at a glance instead
+    # of by opening a metric and inspecting its definition.
+    _leaf_count = sum(1 for _n in tree.committed.values() if _n.kind == NodeKind.LEAF)
+    st.caption(
+        f"{_leaf_count} committed metrics · saved to `{ws.tree_path}` in the private "
+        f"VolleyData repo · updates on merge"
+    )
+    if ws.supports_sets:
+        st.caption(
+            "Metrics here are **filters over individual actions** "
+            "(e.g. skill=Attack, evaluation_code=#), so they can be broken down by set."
+        )
+    else:
+        st.caption(
+            "Metrics here are **match-export columns and arithmetic over them**, "
+            "so there is no per-set detail to break down."
+        )
 
     render_tree_graph(tree, ws)
 
