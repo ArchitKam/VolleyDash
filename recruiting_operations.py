@@ -53,7 +53,18 @@ from typing import Dict, List, Literal, Optional, Union
 
 import pandas as pd
 
-AXES = ("Player", "Game", "Metric")
+# Cube axes, ordered coarse to fine. Set sits between Game and Metric
+# because it SUBDIVIDES a game: _remaining_axes preserves this order when
+# it decides what a Rank groups within, so ranking inside a set groups by
+# (Player, Game) rather than some arbitrary column order.
+#
+# Not every source offers every axis -- Set exists only where the data
+# can see individual sets (source.axes()). An operation naming an axis
+# the current result has no column for is refused by name at execution
+# time rather than silently ignored, so a Set operation against CSV data
+# reports that it cannot be done instead of quietly returning match
+# totals.
+AXES = ("Player", "Game", "Set", "Metric")
 
 _COMPARISONS = {
     ">":  lambda a, b: a > b,
@@ -104,7 +115,7 @@ class ValuePredicate:
 class Slice:
     """Restrict `axis` -- either to an explicit set of values (`keep`), or
     to those whose rows satisfy `predicate`."""
-    axis: Literal["Player", "Game", "Metric"]
+    axis: Literal["Player", "Game", "Set", "Metric"]
     keep: Optional[List[str]] = None
     predicate: Optional[ValuePredicate] = None
 
@@ -121,7 +132,7 @@ class Reduce:
     """Collapse `axis`, aggregating Value with `how`. Always emits
     'N Used' so a partial aggregation can't masquerade as a complete
     one (a 2-of-5-game mean must never look like a 5-of-5 mean)."""
-    axis: Literal["Player", "Game", "Metric"]
+    axis: Literal["Player", "Game", "Set", "Metric"]
     how: str = "mean"
 
     def describe(self) -> str:
@@ -133,7 +144,7 @@ class Rank:
     """Order along `axis` by Value, optionally keeping the top/bottom N.
     NOTE: ranks by VALUE, not chronology -- see the trend caveat in the
     module docstring."""
-    axis: Literal["Player", "Game", "Metric"]
+    axis: Literal["Player", "Game", "Set", "Metric"]
     descending: bool = True
     limit: Optional[int] = None
 
@@ -151,7 +162,7 @@ class Compare:
     baseline. This is what answers "is she above team average" (axis=
     Player) and "is this her best game" (axis=Game).
     """
-    axis: Literal["Player", "Game", "Metric"]
+    axis: Literal["Player", "Game", "Set", "Metric"]
     how: str = "mean"
     mode: Literal["difference", "ratio"] = "difference"
 

@@ -1,7 +1,15 @@
 streamlit
-pandas
+# pydatavolley predates pandas 3 (Arrow-backed strings) and numpy 2
+# (stricter dtype promotion). Both fail deep inside the parser with
+# errors that name neither cause -- see dvw_patch.check_dependency_versions.
+# On Streamlit Cloud, set the Python version to 3.12: 3.14 has no wheels
+# for these pins and will resolve past them.
+pandas<3
+numpy<2
 plotly
 streamlit-agraph
 openai
 requests
 pytest
+pydatavolley
+charset-normalizer

@@ -1,0 +1,1702 @@
+{
+  "category_browse": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": true,
+        "is_gibberish": null,
+        "pipeline": [],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": "#7 Sloan T.",
+        "result": {
+          "columns": [
+            "Metric",
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Kills",
+              "Game A",
+              "#7 Sloan T.",
+              12.0,
+              ""
+            ],
+            [
+              "Kills",
+              "Game B",
+              "#7 Sloan T.",
+              9.0,
+              ""
+            ],
+            [
+              "Kills",
+              "Game C",
+              "#7 Sloan T.",
+              5.0,
+              ""
+            ],
+            [
+              "Attack errors",
+              "Game A",
+              "#7 Sloan T.",
+              2.0,
+              ""
+            ],
+            [
+              "Attack errors",
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Attack errors",
+              "Game C",
+              "#7 Sloan T.",
+              1.0,
+              ""
+            ],
+            [
+              "Total attack attempts",
+              "Game A",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ],
+            [
+              "Total attack attempts",
+              "Game B",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ],
+            [
+              "Total attack attempts",
+              "Game C",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ],
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game A",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game B",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game C",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "Kills per set played",
+              "Game A",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Kills per set played",
+              "Game B",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Kills per set played",
+              "Game C",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#7 Sloan T.",
+              2.5,
+              ""
+            ],
+            [
+              "Net Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              3.333333,
+              ""
+            ],
+            [
+              "Net Kills Per Set",
+              "Game B",
+              "#7 Sloan T.",
+              2.0,
+              ""
+            ],
+            [
+              "Net Kills Per Set",
+              "Game C",
+              "#7 Sloan T.",
+              2.0,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Sloan's Attacking"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "(K - E) / TA, hitting efficiency",
+        "Attack errors",
+        "Kills",
+        "Kills Per Set",
+        "Kills per set played",
+        "Net Kills Per Set",
+        "Total attack attempts"
+      ],
+      "rows": [
+        [
+          "#7 Sloan T.",
+          "Game A",
+          "NaN",
+          2.0,
+          12.0,
+          4.0,
+          "NaN",
+          3.333333,
+          "NaN"
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          "NaN",
+          3.0,
+          9.0,
+          3.0,
+          "NaN",
+          2.0,
+          "NaN"
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          "NaN",
+          1.0,
+          5.0,
+          2.5,
+          "NaN",
+          2.0,
+          "NaN"
+        ]
+      ]
+    }
+  },
+  "compare_above_team_average": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [
+          {
+            "axis": "Player",
+            "how": "mean",
+            "mode": "difference",
+            "op": "compare"
+          },
+          {
+            "axis": "Metric",
+            "keep": [
+              "Kills Per Set"
+            ],
+            "op": "slice",
+            "predicate": null
+          }
+        ],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": null,
+        "result": {
+          "columns": [
+            "Metric",
+            "Game",
+            "Player",
+            "Value",
+            "Note",
+            "Baseline"
+          ],
+          "rows": [
+            [
+              "Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              0.666667,
+              "",
+              3.333333
+            ],
+            [
+              "Kills Per Set",
+              "Game A",
+              "#22 Azana S.",
+              -0.666667,
+              "",
+              3.333333
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#7 Sloan T.",
+              -1.0,
+              "",
+              4.0
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#22 Azana S.",
+              1.0,
+              "",
+              4.0
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#7 Sloan T.",
+              -0.25,
+              "",
+              2.75
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#22 Azana S.",
+              0.25,
+              "",
+              2.75
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Above average"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#22 Azana S.",
+          "Game A",
+          -0.666667
+        ],
+        [
+          "#22 Azana S.",
+          "Game B",
+          1.0
+        ],
+        [
+          "#22 Azana S.",
+          "Game C",
+          0.25
+        ],
+        [
+          "#7 Sloan T.",
+          "Game A",
+          0.666667
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          -1.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          -0.25
+        ]
+      ]
+    }
+  },
+  "gibberish_metric": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [],
+        "is_category": null,
+        "is_gibberish": true,
+        "pipeline": [],
+        "pipeline_notes": [],
+        "raw_metric_name": "florbnak",
+        "resolved_player": null,
+        "result": {
+          "columns": [],
+          "rows": []
+        },
+        "status": "missing_metric",
+        "title": "nope"
+      }
+    ],
+    "consolidated": {
+      "columns": [],
+      "rows": []
+    }
+  },
+  "missing_metric": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [],
+        "is_category": null,
+        "is_gibberish": false,
+        "pipeline": [],
+        "pipeline_notes": [],
+        "raw_metric_name": "Blocks Per Possession",
+        "resolved_player": null,
+        "result": {
+          "columns": [],
+          "rows": []
+        },
+        "status": "missing_metric",
+        "title": "nope"
+      }
+    ],
+    "consolidated": {
+      "columns": [],
+      "rows": []
+    }
+  },
+  "rank_top_players": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [
+          {
+            "axis": "Player",
+            "descending": true,
+            "limit": 3,
+            "op": "rank"
+          },
+          {
+            "axis": "Metric",
+            "keep": [
+              "Kills Per Set"
+            ],
+            "op": "slice",
+            "predicate": null
+          }
+        ],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": null,
+        "result": {
+          "columns": [
+            "Metric",
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game A",
+              "#22 Azana S.",
+              2.666667,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#22 Azana S.",
+              5.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#22 Azana S.",
+              3.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#7 Sloan T.",
+              2.5,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Top Kills Per Set"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#22 Azana S.",
+          "Game A",
+          2.666667
+        ],
+        [
+          "#22 Azana S.",
+          "Game B",
+          5.0
+        ],
+        [
+          "#22 Azana S.",
+          "Game C",
+          3.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game A",
+          4.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          3.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          2.5
+        ]
+      ]
+    }
+  },
+  "rank_within_category": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": true,
+        "is_gibberish": null,
+        "pipeline": [
+          {
+            "axis": "Player",
+            "descending": true,
+            "limit": 3,
+            "op": "rank"
+          }
+        ],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": null,
+        "result": {
+          "columns": [
+            "Metric",
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game A",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game A",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "Attack errors",
+              "Game A",
+              "#7 Sloan T.",
+              2.0,
+              ""
+            ],
+            [
+              "Attack errors",
+              "Game A",
+              "#22 Azana S.",
+              1.0,
+              ""
+            ],
+            [
+              "Kills",
+              "Game A",
+              "#7 Sloan T.",
+              12.0,
+              ""
+            ],
+            [
+              "Kills",
+              "Game A",
+              "#22 Azana S.",
+              8.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game A",
+              "#22 Azana S.",
+              2.666667,
+              ""
+            ],
+            [
+              "Kills per set played",
+              "Game A",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Kills per set played",
+              "Game A",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Net Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              3.333333,
+              ""
+            ],
+            [
+              "Net Kills Per Set",
+              "Game A",
+              "#22 Azana S.",
+              2.333333,
+              ""
+            ],
+            [
+              "Total attack attempts",
+              "Game A",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ],
+            [
+              "Total attack attempts",
+              "Game A",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ],
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game B",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game B",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "Attack errors",
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Attack errors",
+              "Game B",
+              "#22 Azana S.",
+              2.0,
+              ""
+            ],
+            [
+              "Kills",
+              "Game B",
+              "#22 Azana S.",
+              15.0,
+              ""
+            ],
+            [
+              "Kills",
+              "Game B",
+              "#7 Sloan T.",
+              9.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#22 Azana S.",
+              5.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Kills per set played",
+              "Game B",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Kills per set played",
+              "Game B",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Net Kills Per Set",
+              "Game B",
+              "#22 Azana S.",
+              4.333333,
+              ""
+            ],
+            [
+              "Net Kills Per Set",
+              "Game B",
+              "#7 Sloan T.",
+              2.0,
+              ""
+            ],
+            [
+              "Total attack attempts",
+              "Game B",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ],
+            [
+              "Total attack attempts",
+              "Game B",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ],
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game C",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "(K - E) / TA, hitting efficiency",
+              "Game C",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack Atk%' is not a real column or an existing metric"
+            ],
+            [
+              "Attack errors",
+              "Game C",
+              "#7 Sloan T.",
+              1.0,
+              ""
+            ],
+            [
+              "Attack errors",
+              "Game C",
+              "#22 Azana S.",
+              0.0,
+              ""
+            ],
+            [
+              "Kills",
+              "Game C",
+              "#22 Azana S.",
+              6.0,
+              ""
+            ],
+            [
+              "Kills",
+              "Game C",
+              "#7 Sloan T.",
+              5.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#22 Azana S.",
+              3.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#7 Sloan T.",
+              2.5,
+              ""
+            ],
+            [
+              "Kills per set played",
+              "Game C",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Kills per set played",
+              "Game C",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack K/S' is not a real column or an existing metric"
+            ],
+            [
+              "Net Kills Per Set",
+              "Game C",
+              "#22 Azana S.",
+              3.0,
+              ""
+            ],
+            [
+              "Net Kills Per Set",
+              "Game C",
+              "#7 Sloan T.",
+              2.0,
+              ""
+            ],
+            [
+              "Total attack attempts",
+              "Game C",
+              "#7 Sloan T.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ],
+            [
+              "Total attack attempts",
+              "Game C",
+              "#22 Azana S.",
+              "NaN",
+              "'Attack TA' is not a real column or an existing metric"
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Attack leaders"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "(K - E) / TA, hitting efficiency",
+        "Attack errors",
+        "Kills",
+        "Kills Per Set",
+        "Kills per set played",
+        "Net Kills Per Set",
+        "Total attack attempts"
+      ],
+      "rows": [
+        [
+          "#22 Azana S.",
+          "Game A",
+          "NaN",
+          1.0,
+          8.0,
+          2.666667,
+          "NaN",
+          2.333333,
+          "NaN"
+        ],
+        [
+          "#22 Azana S.",
+          "Game B",
+          "NaN",
+          2.0,
+          15.0,
+          5.0,
+          "NaN",
+          4.333333,
+          "NaN"
+        ],
+        [
+          "#22 Azana S.",
+          "Game C",
+          "NaN",
+          0.0,
+          6.0,
+          3.0,
+          "NaN",
+          3.0,
+          "NaN"
+        ],
+        [
+          "#7 Sloan T.",
+          "Game A",
+          "NaN",
+          2.0,
+          12.0,
+          4.0,
+          "NaN",
+          3.333333,
+          "NaN"
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          "NaN",
+          3.0,
+          9.0,
+          3.0,
+          "NaN",
+          2.0,
+          "NaN"
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          "NaN",
+          1.0,
+          5.0,
+          2.5,
+          "NaN",
+          2.0,
+          "NaN"
+        ]
+      ]
+    }
+  },
+  "reduce_mean_across_games": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [
+          {
+            "axis": "Game",
+            "how": "mean",
+            "op": "reduce"
+          },
+          {
+            "axis": "Player",
+            "keep": [
+              "#7 Sloan T."
+            ],
+            "op": "slice",
+            "predicate": null
+          },
+          {
+            "axis": "Metric",
+            "keep": [
+              "Kills Per Set"
+            ],
+            "op": "slice",
+            "predicate": null
+          }
+        ],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": "#7 Sloan T.",
+        "result": {
+          "columns": [
+            "Player",
+            "Metric",
+            "Value",
+            "N Used",
+            "Game"
+          ],
+          "rows": [
+            [
+              "#7 Sloan T.",
+              "Kills Per Set",
+              3.166667,
+              3,
+              "mean of games"
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Sloan average"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#7 Sloan T.",
+          "mean of games",
+          3.166667
+        ]
+      ]
+    }
+  },
+  "single_metric_all_players": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": null,
+        "result": {
+          "columns": [
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Game A",
+              "#22 Azana S.",
+              2.666667,
+              ""
+            ],
+            [
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Game B",
+              "#22 Azana S.",
+              5.0,
+              ""
+            ],
+            [
+              "Game C",
+              "#7 Sloan T.",
+              2.5,
+              ""
+            ],
+            [
+              "Game C",
+              "#22 Azana S.",
+              3.0,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Kills Per Set"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#22 Azana S.",
+          "Game A",
+          2.666667
+        ],
+        [
+          "#22 Azana S.",
+          "Game B",
+          5.0
+        ],
+        [
+          "#22 Azana S.",
+          "Game C",
+          3.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game A",
+          4.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          3.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          2.5
+        ]
+      ]
+    }
+  },
+  "single_metric_one_player": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": "#7 Sloan T.",
+        "result": {
+          "columns": [
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Game C",
+              "#7 Sloan T.",
+              2.5,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Sloan's Kills Per Set"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#7 Sloan T.",
+          "Game A",
+          4.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          3.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          2.5
+        ]
+      ]
+    }
+  },
+  "slice_cross_metric_predicate": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [
+          {
+            "axis": "Game",
+            "keep": null,
+            "op": "slice",
+            "predicate": {
+              "decided_by_player": null,
+              "metric": "Kills",
+              "op": ">=",
+              "threshold": 10.0
+            }
+          },
+          {
+            "axis": "Player",
+            "keep": [
+              "#7 Sloan T."
+            ],
+            "op": "slice",
+            "predicate": null
+          },
+          {
+            "axis": "Metric",
+            "keep": [
+              "Kills Per Set"
+            ],
+            "op": "slice",
+            "predicate": null
+          }
+        ],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": "#7 Sloan T.",
+        "result": {
+          "columns": [
+            "Metric",
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Games with 10+ kills"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#7 Sloan T.",
+          "Game A",
+          4.0
+        ]
+      ]
+    }
+  },
+  "slice_predicate_decided_by_named_player": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [
+          {
+            "axis": "Game",
+            "keep": null,
+            "op": "slice",
+            "predicate": {
+              "decided_by_player": "#7 Sloan T.",
+              "metric": "Kills",
+              "op": ">=",
+              "threshold": 10.0
+            }
+          },
+          {
+            "axis": "Metric",
+            "keep": [
+              "Kills Per Set"
+            ],
+            "op": "slice",
+            "predicate": null
+          }
+        ],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": null,
+        "result": {
+          "columns": [
+            "Metric",
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game A",
+              "#22 Azana S.",
+              2.666667,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Games where Sloan had 10+"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#22 Azana S.",
+          "Game A",
+          2.666667
+        ],
+        [
+          "#7 Sloan T.",
+          "Game A",
+          4.0
+        ]
+      ]
+    }
+  },
+  "two_metrics_same_player": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": "#7 Sloan T.",
+        "result": {
+          "columns": [
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Game C",
+              "#7 Sloan T.",
+              2.5,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "KPS"
+      },
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": "#7 Sloan T.",
+        "result": {
+          "columns": [
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Game A",
+              "#7 Sloan T.",
+              12.0,
+              ""
+            ],
+            [
+              "Game B",
+              "#7 Sloan T.",
+              9.0,
+              ""
+            ],
+            [
+              "Game C",
+              "#7 Sloan T.",
+              5.0,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Kills"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set",
+        "Kills"
+      ],
+      "rows": [
+        [
+          "#7 Sloan T.",
+          "Game A",
+          4.0,
+          12.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          3.0,
+          9.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          2.5,
+          5.0
+        ]
+      ]
+    }
+  },
+  "two_players_merged": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": null,
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [
+          {
+            "axis": "Player",
+            "keep": [
+              "#7 Sloan T.",
+              "#22 Azana S."
+            ],
+            "op": "slice",
+            "predicate": null
+          },
+          {
+            "axis": "Metric",
+            "keep": [
+              "Kills Per Set"
+            ],
+            "op": "slice",
+            "predicate": null
+          }
+        ],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": null,
+        "result": {
+          "columns": [
+            "Metric",
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Kills Per Set",
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game A",
+              "#22 Azana S.",
+              2.666667,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game B",
+              "#22 Azana S.",
+              5.0,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#7 Sloan T.",
+              2.5,
+              ""
+            ],
+            [
+              "Kills Per Set",
+              "Game C",
+              "#22 Azana S.",
+              3.0,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "Sloan vs Azana -- Kills Per Set"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#22 Azana S.",
+          "Game A",
+          2.666667
+        ],
+        [
+          "#22 Azana S.",
+          "Game B",
+          5.0
+        ],
+        [
+          "#22 Azana S.",
+          "Game C",
+          3.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game A",
+          4.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          3.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          2.5
+        ]
+      ]
+    }
+  },
+  "unresolvable_game_hint": {
+    "actions": [
+      {
+        "error": null,
+        "game_note": "Couldn't identify game 'Nonexistent U' -- showing all selected games instead.",
+        "games": [
+          "Game A",
+          "Game B",
+          "Game C"
+        ],
+        "is_category": false,
+        "is_gibberish": null,
+        "pipeline": [],
+        "pipeline_notes": [],
+        "raw_metric_name": null,
+        "resolved_player": "#7 Sloan T.",
+        "result": {
+          "columns": [
+            "Game",
+            "Player",
+            "Value",
+            "Note"
+          ],
+          "rows": [
+            [
+              "Game A",
+              "#7 Sloan T.",
+              4.0,
+              ""
+            ],
+            [
+              "Game B",
+              "#7 Sloan T.",
+              3.0,
+              ""
+            ],
+            [
+              "Game C",
+              "#7 Sloan T.",
+              2.5,
+              ""
+            ]
+          ]
+        },
+        "status": null,
+        "title": "bad game"
+      }
+    ],
+    "consolidated": {
+      "columns": [
+        "Player",
+        "Game",
+        "Kills Per Set"
+      ],
+      "rows": [
+        [
+          "#7 Sloan T.",
+          "Game A",
+          4.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game B",
+          3.0
+        ],
+        [
+          "#7 Sloan T.",
+          "Game C",
+          2.5
+        ]
+      ]
+    }
+  }
+}

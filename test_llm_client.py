@@ -141,3 +141,78 @@ def test_strips_markdown_code_fences():
     with patch("openai.resources.chat.completions.Completions.create", fake_create):
         result = rl.call_llm("sys", "user")
     assert result == '{"a": 1}'
+
+
+# ── set_hint (the Set drill-down's router field) ───────────────
+
+class TestSetHint:
+    """set_hint becomes an identity value on the Set axis, so a hint that
+    does not normalise to exactly the label the source emits would filter
+    to nothing -- which reads as "she did not play" rather than "the
+    filter did not match". Normalisation is therefore the router's job,
+    not the query layer's."""
+
+    @staticmethod
+    def _tree():
+        from recruiting_tree import KnowledgeTree
+        tree = KnowledgeTree()
+        tree.add_root()
+        return tree
+
+    def test_recognised_forms_all_normalise_to_one_label(self):
+        from recruiting_llm import _repair_set_hint
+        for raw in ("set 3", "Set 3", "the 3rd set", "3", 3, 3.0):
+            assert _repair_set_hint(raw, []) == "Set 3", raw
+
+    def test_absent_or_unparseable_is_no_filter(self):
+        from recruiting_llm import _repair_set_hint
+        for raw in (None, "", "   ", "the deciding set", True, False):
+            assert _repair_set_hint(raw, []) is None, raw
+
+    def test_out_of_range_is_dropped_with_a_note_not_clamped(self):
+        """"set 25" is the model echoing a score. Clamping it to set 5
+        would answer a question nobody asked."""
+        from recruiting_llm import _repair_set_hint
+        notes = []
+        assert _repair_set_hint("set 25", notes) is None
+        assert notes and "at most 5 sets" in notes[0]
+        assert _repair_set_hint(0, []) is None
+
+    def test_repair_carries_set_hint_onto_the_action(self):
+        from recruiting_llm import _validate_and_repair
+        repaired = _validate_and_repair(
+            {"actions": [{"metric_of_interest": "Kills", "skill_group": None,
+                          "player": "Sloan", "game_hint": None, "set_hint": "set 2",
+                          "title": "t", "pipeline": []}]},
+            self._tree(),
+        )
+        assert repaired["actions"][0]["set_hint"] == "Set 2"
+
+    def test_different_sets_are_different_questions_and_do_not_merge(self):
+        from recruiting_llm import merge_same_shape_actions
+        actions = [
+            {"metric_of_interest": "Kills", "skill_group": None, "player": "Sloan",
+             "game_hint": None, "set_hint": "Set 1", "is_committed": True, "pipeline": []},
+            {"metric_of_interest": "Kills", "skill_group": None, "player": "Azana",
+             "game_hint": None, "set_hint": "Set 2", "is_committed": True, "pipeline": []},
+        ]
+        assert len(merge_same_shape_actions(actions)) == 2
+
+    def test_same_set_still_merges_two_players(self):
+        from recruiting_llm import merge_same_shape_actions
+        actions = [
+            {"metric_of_interest": "Kills", "skill_group": None, "player": "Sloan",
+             "game_hint": None, "set_hint": "Set 1", "is_committed": True, "pipeline": []},
+            {"metric_of_interest": "Kills", "skill_group": None, "player": "Azana",
+             "game_hint": None, "set_hint": "Set 1", "is_committed": True, "pipeline": []},
+        ]
+        merged = merge_same_shape_actions(actions)
+        assert len(merged) == 1 and merged[0]["player"] == ["Sloan", "Azana"]
+
+    def test_the_field_is_only_offered_when_the_source_can_answer_it(self):
+        """A Huddle CSV row is a whole match; advertising a set filter
+        against it invites a question with no honest answer."""
+        from recruiting_llm import _build_router_system_prompt
+        tree = self._tree()
+        assert "set_hint" not in _build_router_system_prompt([], tree, ["Game A"])
+        assert "set_hint" in _build_router_system_prompt([], tree, ["Game A"], supports_sets=True)

@@ -30,17 +30,23 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import pytest
 
-import app
+from evaluate_csv import run_category_query, run_metric_query
+from query import (
+    consolidate_action_results, execute_query_actions, find_leaf_by_exact_label,
+    get_branches,
+)
 import recruiting_data_store
+from recruiting_data_store import GameInfo
 from recruiting_llm import (
     LLMUnavailableError, _validate_and_repair, decompose_recruiting_query,
     merge_same_shape_actions, parse_phrase_to_formula, parse_phrase_to_formula_llm,
 )
 from recruiting_operations import Reduce, Rank, Compare, Slice, ValuePredicate
 from recruiting_tree import KnowledgeTree
+from source_csv import CsvSource
 
 # The real recruiting_kb_data.json now lives in the private VolleyData repo,
-# not on local disk -- app.load_committed_tree() needs live GITHUB_DATA_REPO/
+# not on local disk -- recruiting_data_store.load_committed_tree() needs live GITHUB_DATA_REPO/
 # GITHUB_DATA_TOKEN secrets and network access to reach it, neither of which
 # CI/offline test runs can guarantee. This points at the local staging copy
 # (see VolleyData_upload/ alongside this file, the same file that gets
@@ -70,7 +76,7 @@ def real_tree() -> KnowledgeTree:
     with open(_STAGED_TREE_JSON) as f:
         tree = recruiting_data_store._tree_from_json_dict(json.load(f))
     for label in ("Kills Per Set", "Passing quality percentage", "Kills"):
-        assert app.find_leaf_by_exact_label(tree, label) is not None, f"expected '{label}' to be committed"
+        assert find_leaf_by_exact_label(tree, label) is not None, f"expected '{label}' to be committed"
     return tree
 
 
@@ -80,7 +86,7 @@ def _synthetic_row(name: str, attack_k: float, attack_e: float, sets_played: flo
 
 
 @pytest.fixture
-def synthetic_games() -> List[Tuple["app.GameInfo", pd.DataFrame]]:
+def synthetic_games() -> List[Tuple["GameInfo", pd.DataFrame]]:
     """3 controlled games x 2 players, hand-picked values so pipeline
     results (mean/rank/compare) can be asserted EXACTLY rather than just
     'didn't crash'.
@@ -91,9 +97,9 @@ def synthetic_games() -> List[Tuple["app.GameInfo", pd.DataFrame]]:
     Sloan's own Kills (Attack K, raw): Game A=12 (>=10), Game B=9 (<10), Game C=5 (<10)
     Azana's own Kills (Attack K, raw): Game A=8 (<10), Game B=15 (>=10), Game C=6 (<10)
     """
-    game_a = app.GameInfo(path="synthetic-A", filename="A.csv", opponent="Game A")
-    game_b = app.GameInfo(path="synthetic-B", filename="B.csv", opponent="Game B")
-    game_c = app.GameInfo(path="synthetic-C", filename="C.csv", opponent="Game C")
+    game_a = GameInfo(path="synthetic-A", filename="A.csv", opponent="Game A")
+    game_b = GameInfo(path="synthetic-B", filename="B.csv", opponent="Game B")
+    game_c = GameInfo(path="synthetic-C", filename="C.csv", opponent="Game C")
 
     df_a = pd.DataFrame([_synthetic_row("#7 Sloan T.", 12, 2, 3, 0.8), _synthetic_row("#22 Azana S.", 8, 1, 3, 0.7)])
     df_b = pd.DataFrame([_synthetic_row("#7 Sloan T.", 9, 3, 3, 0.6), _synthetic_row("#22 Azana S.", 15, 2, 3, 0.9)])
@@ -103,93 +109,24 @@ def synthetic_games() -> List[Tuple["app.GameInfo", pd.DataFrame]]:
 
 
 def _run_repaired_actions(raw_decomposition: dict, tree: KnowledgeTree,
-                           game_dfs: List[Tuple["app.GameInfo", pd.DataFrame]],
+                           game_dfs: List[Tuple["GameInfo", pd.DataFrame]],
                            known_player_pool: List[str]) -> List[dict]:
     """
-    Mirrors the REAL action-execution loop inside app.py's `with tab_qa:`
-    block line for line (same functions, same fetch_player/pipeline/
-    auto-append-Slice logic) but driven directly in a test, without a
-    Streamlit runtime. Kept as a small local helper (not extracted into
-    app.py itself) since app.py's loop is UI code interleaved with widget
-    calls -- this reproduces its DECISION logic exactly, calling only the
-    real, non-Streamlit functions it calls.
+    Repairs a raw decomposition and runs it through the REAL action
+    executor.
+
+    This used to reproduce app.py's loop by hand, with a comment saying
+    it mirrored that loop "line for line". That was true when written
+    and became a liability the moment the loop moved: a hand copy of
+    production logic tests the copy. It now calls the shipped function,
+    so these tests fail when the app changes rather than when someone
+    forgets to update a duplicate.
+
+    `known_player_pool` is no longer passed: the roster comes from the
+    source, which is where the app gets it too.
     """
     decomposition = _validate_and_repair(raw_decomposition, tree)
-    action_results = []
-
-    for action in decomposition.get("actions", []):
-        is_category = bool(action.get("skill_group"))
-        pipeline = action.get("pipeline") or []
-
-        if is_category:
-            branch_id = app.get_branches(tree).get(action["skill_group"])
-            if branch_id is None:
-                action_results.append({"action": action, "error": "Category no longer exists."})
-                continue
-        else:
-            leaf = app.find_leaf_by_exact_label(tree, action.get("metric_of_interest"))
-            if leaf is None or leaf.spec is None:
-                raw_metric_name = action.get("metric_of_interest") or "Unknown Metric"
-                unrecognized_lower = {t.lower() for t in decomposition.get("unrecognized_terms", [])}
-                action_results.append({
-                    "action": action, "status": "missing_metric",
-                    "raw_metric_name": raw_metric_name,
-                    "is_gibberish": raw_metric_name.strip().lower() in unrecognized_lower,
-                })
-                continue
-
-        # Mirrors app.py's raw_player/multi_players handling exactly: a
-        # merged action's "player" field can be a LIST of raw hints
-        # (merge_same_shape_actions, recruiting_llm.py), each of which
-        # still needs resolving individually against the real roster.
-        raw_player = action.get("player")
-        if isinstance(raw_player, list):
-            resolved_players = []
-            seen_players = set()
-            for hint in raw_player:
-                candidate = app.resolve_player_name(hint, known_player_pool)
-                if candidate is not None and candidate not in seen_players:
-                    seen_players.add(candidate)
-                    resolved_players.append(candidate)
-            multi_players = resolved_players if len(resolved_players) >= 2 else None
-            resolved_player = resolved_players[0] if len(resolved_players) == 1 else None
-        else:
-            resolved_player = app.resolve_player_name(raw_player, known_player_pool)
-            multi_players = None
-        action_games = [g for g, _ in game_dfs]  # tests pre-resolve games directly
-
-        fetch_player = None if (pipeline or multi_players) else resolved_player
-        if is_category:
-            result_df = app.run_category_query(tree, branch_id, game_dfs, player_name=fetch_player)
-        else:
-            result_df = app.run_metric_query(leaf.spec, tree, game_dfs, player_name=fetch_player)
-
-        pipeline_notes: List[str] = []
-        if pipeline or multi_players:
-            pipeline = list(pipeline)
-            has_player_slice = any(isinstance(op, Slice) and op.axis == "Player" for op in pipeline)
-            if not has_player_slice:
-                if multi_players:
-                    pipeline.append(Slice(axis="Player", keep=multi_players))
-                elif resolved_player is not None:
-                    pipeline.append(Slice(axis="Player", keep=[resolved_player]))
-            has_metric_slice = any(isinstance(op, Slice) and op.axis == "Metric" for op in pipeline)
-            primary_metric = action.get("metric_of_interest")
-            if not is_category and primary_metric and not has_metric_slice:
-                pipeline.append(Slice(axis="Metric", keep=[primary_metric]))
-            combined_df, fetch_notes = app.prepare_pipeline_frame(
-                result_df, pipeline, action.get("metric_of_interest"), tree, game_dfs,
-            )
-            result_df, run_notes = app.run_pipeline(combined_df, pipeline)
-            pipeline_notes = fetch_notes + run_notes
-
-        action_results.append({
-            "action": action, "is_category": is_category, "resolved_player": resolved_player,
-            "action_games": action_games, "result_df": result_df,
-            "pipeline": pipeline, "pipeline_notes": pipeline_notes,
-        })
-
-    return action_results
+    return execute_query_actions(decomposition, tree, CsvSource(game_dfs))
 
 
 KNOWN_PLAYERS = ["#7 Sloan T.", "#22 Azana S."]
@@ -225,8 +162,8 @@ def test_regression_single_metric_no_pipeline(real_tree, synthetic_games):
     assert math.isclose(values["Game C"], 2.5)
 
     # Byte-identical to calling run_metric_query directly ourselves.
-    leaf = app.find_leaf_by_exact_label(real_tree, "Kills Per Set")
-    direct = app.run_metric_query(leaf.spec, real_tree, synthetic_games, player_name="#7 Sloan T.")
+    leaf = find_leaf_by_exact_label(real_tree, "Kills Per Set")
+    direct = run_metric_query(leaf.spec, real_tree, synthetic_games, player_name="#7 Sloan T.")
     pd.testing.assert_frame_equal(df.reset_index(drop=True), direct.reset_index(drop=True))
 
 
@@ -624,7 +561,7 @@ def test_consolidate_action_results_keeps_both_players_for_same_metric():
             ]),
         },
     ]
-    consolidated = app.consolidate_action_results(action_results)
+    consolidated = consolidate_action_results(action_results)
     assert set(consolidated["Player"]) == {"#7 Sloan T.", "#14 Kendal L."}
     assert len(consolidated) == 4  # 2 players x 2 games, nobody dropped
     assert list(consolidated.columns) == ["Player", "Game", "Kills Per Set"]
