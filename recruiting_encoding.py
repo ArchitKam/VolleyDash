@@ -29,7 +29,12 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-AXES = ("Player", "Game", "Metric")
+# Imported rather than restated: this list decides what the chart layer
+# can SEE, and a cube axis missing from it is silently dropped -- rows
+# differing only on that axis collapse into anonymous bars. That is
+# exactly what happened to Set, which existed everywhere else in the
+# system and nowhere here.
+from recruiting_operations import AXES
 _AXIS_KEY = {"Player": "player", "Game": "game", "Metric": "metric"}
 HIGHLIGHT_OUTLINE_WIDTH = 4
 
@@ -43,7 +48,7 @@ class EncodingAssignment:
 
 
 def varying_axes(df: pd.DataFrame) -> List[str]:
-    """Which of Player/Game/Metric are present in df AND have more than
+    """Which cube axes are present in df AND have more than
     one distinct (non-null) value in THIS result -- only these are ever
     eligible for a slot. Absent columns and constant-valued ones are
     both excluded, for the same reason: encoding an axis that can't
@@ -61,7 +66,12 @@ def default_encoding(df: pd.DataFrame) -> EncodingAssignment:
     dropdowns.
     """
     axes = varying_axes(df)
-    position = "Game" if "Game" in axes else None
+    # Game on x, per the fixed rule. When a result covers ONE game and
+    # is broken out by set -- the per-set drill-down -- Game cannot
+    # distinguish anything, and Set is the axis that carries the story,
+    # so it takes x instead. Without this the sets had no slot at all
+    # and were drawn as unlabelled bars at x = 0, 1, 2.
+    position = "Game" if "Game" in axes else ("Set" if "Set" in axes else None)
     return EncodingAssignment(
         position=position,
         color="Player" if "Player" in axes else None,
@@ -71,8 +81,22 @@ def default_encoding(df: pd.DataFrame) -> EncodingAssignment:
         # one thing a Game axis is for -- you cannot see a run of form in
         # a bar chart sorted by height. Value order stays available; it
         # is just no longer the default for Game.
-        game_order="original" if position == "Game" else "value",
+        # Chronological for Game, and for Set too: set 1 then 2 then 3,
+        # never tallest-first.
+        game_order="original" if position in ("Game", "Set") else "value",
     )
+
+
+def unassigned_axes(df: pd.DataFrame, encoding: EncodingAssignment) -> List[str]:
+    """
+    Axes that vary in this result but are drawn nowhere.
+
+    Rows differing only on such an axis land on the same mark, so the
+    chart shows several values stacked where the reader sees one. Worth
+    naming rather than leaving to be noticed.
+    """
+    assigned = {encoding.position, encoding.color, encoding.facet}
+    return [axis for axis in varying_axes(df) if axis not in assigned]
 
 
 def slot_options(df: pd.DataFrame) -> List[Optional[str]]:

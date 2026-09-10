@@ -39,7 +39,7 @@ from recruiting_data_store import (
 )
 from recruiting_encoding import (
     EncodingAssignment, default_encoding, reconcile_encoding, resolve_clicked_point,
-    set_game_order, slot_options, render as render_encoded_panels,
+    set_game_order, slot_options, unassigned_axes, render as render_encoded_panels,
 )
 import workspace
 
@@ -937,6 +937,14 @@ with tab_qa:
                             # sorted by identity).
                             position_order=known_games if encoding.position == "Game" else None,
                         )
+                        _unassigned = unassigned_axes(result_df, encoding)
+                        if _unassigned:
+                            st.caption(
+                                f"⚠️ {', '.join(_unassigned)} varies here but isn't drawn — "
+                                "rows differing only on it land on the same bar. Assign it "
+                                "to a slot above, or narrow the question."
+                            )
+
                         if not panels:
                             st.info("No computable values for this chart.")
                             continue

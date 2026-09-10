@@ -409,3 +409,77 @@ class TestGameAxisOrder:
         encoding = set_game_order(default_encoding(frame), "value")
         panels = render(frame, encoding)
         assert list(panels[0][1].data[0].y) == [9.0, 5.0, 1.0]
+
+
+# ── the fixed encoding rule ────────────────────────────────────
+
+class TestFixedEncodingDefaults:
+    """Player -> colour, Game -> x, Metric -> panel. Absolute, not
+    cardinality-dependent."""
+
+    @staticmethod
+    def _df(rows):
+        import pandas as pd
+        return pd.DataFrame(rows)
+
+    def test_the_rule_holds_when_all_three_vary(self):
+        from recruiting_encoding import default_encoding
+
+        e = default_encoding(self._df([
+            {"Metric": "Kills", "Game": "A", "Player": "P1", "Value": 1},
+            {"Metric": "Aces", "Game": "B", "Player": "P2", "Value": 2},
+        ]))
+        assert (e.position, e.color, e.facet) == ("Game", "Player", "Metric")
+
+    def test_an_axis_that_cannot_distinguish_anything_is_left_unassigned(self):
+        from recruiting_encoding import default_encoding
+
+        e = default_encoding(self._df([
+            {"Metric": "Kills", "Game": "A", "Player": "P1", "Value": 1},
+            {"Metric": "Kills", "Game": "B", "Player": "P2", "Value": 2},
+        ]))
+        assert (e.position, e.color) == ("Game", "Player")
+        assert e.facet is None, "one metric is a panel of one"
+
+    def test_a_single_game_broken_out_by_set_puts_set_on_x(self):
+        """Set was invisible to the chart layer entirely -- AXES did not
+        list it -- so a per-set drill-down drew unlabelled bars at
+        x = 0, 1, 2 and lost which set was which."""
+        from recruiting_encoding import default_encoding, render
+
+        df = self._df([
+            {"Metric": "Kills", "Game": "Purdue", "Set": f"Set {i}", "Player": "P1", "Value": v}
+            for i, v in enumerate([2, 1, 3], start=1)
+        ])
+        e = default_encoding(df)
+        assert e.position == "Set"
+        assert list(render(df, e)[0][1].data[0].x) == ["Set 1", "Set 2", "Set 3"]
+
+    def test_sets_are_ordered_1_2_3_not_tallest_first(self):
+        from recruiting_encoding import default_encoding
+
+        df = self._df([
+            {"Metric": "Kills", "Game": "P", "Set": "Set 1", "Player": "A", "Value": 9},
+            {"Metric": "Kills", "Game": "P", "Set": "Set 2", "Player": "A", "Value": 1},
+        ])
+        assert default_encoding(df).game_order == "original"
+
+    def test_an_axis_that_varies_but_is_drawn_nowhere_is_reported(self):
+        """Rows differing only on an undrawn axis land on the same mark:
+        several values where the reader sees one."""
+        from recruiting_encoding import default_encoding, unassigned_axes
+
+        df = self._df([
+            {"Metric": "Kills", "Game": g, "Set": s, "Player": "P1", "Value": 1}
+            for g in ("A", "B") for s in ("Set 1", "Set 2")
+        ])
+        assert unassigned_axes(df, default_encoding(df)) == ["Set"]
+
+    def test_nothing_is_reported_when_every_varying_axis_is_drawn(self):
+        from recruiting_encoding import default_encoding, unassigned_axes
+
+        df = self._df([
+            {"Metric": "Kills", "Game": "A", "Player": "P1", "Value": 1},
+            {"Metric": "Aces", "Game": "B", "Player": "P2", "Value": 2},
+        ])
+        assert unassigned_axes(df, default_encoding(df)) == []
