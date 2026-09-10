@@ -207,6 +207,17 @@ def _tree_from_json_dict(data: dict) -> KnowledgeTree:
     tree.add_root()
     root = tree.committed[tree.root_id]
 
+    # A payload whose top-level key is not ours is NOT an empty tree.
+    # data.get("recruiting", {}) quietly returned {} for the event
+    # knowledge base, producing a tree with no branches at all -- which
+    # then reached the router as "this knowledge base has categories:
+    # NONE" and silently dropped every question.
+    if "recruiting" not in data:
+        raise ValueError(
+            "not a recruiting knowledge base: expected a top-level 'recruiting' key, "
+            f"found {sorted(data) or 'nothing'}"
+        )
+
     for branch_label, branch_data in data.get("recruiting", {}).items():
         branch_id = branch_data.get("branch_node_id") or tree._new_id(branch_label)
         branch_node = Node(node_id=branch_id, label=branch_label,

@@ -46,6 +46,18 @@ RECRUITING = "recruiting"
 PLAYER_ANALYSIS = "player_analysis"
 
 
+def _has_branches(tree: KnowledgeTree) -> bool:
+    """A tree with no branches is unusable: every category question
+    resolves against an empty list and is dropped. Cheap to check and
+    the difference between a working app and a silent one."""
+    from recruiting_tree import NodeKind
+
+    return any(
+        node.kind == NodeKind.BRANCH and node.node_id != tree.root_id
+        for node in tree.committed.values()
+    )
+
+
 def dvw_unavailable_reason() -> Optional[str]:
     """
     Why the play-by-play workspace cannot be offered, or None if it can.
@@ -175,12 +187,33 @@ def build_recruiting(selected_game_paths: Optional[List[str]] = None) -> Workspa
             warnings.append(f"Couldn't load {game.filename}: {error}")
 
     tree = data_store.load_committed_tree()
+    if tree is not None and not _has_branches(tree):
+        # A branchless tree answers every category question with
+        # "categories: NONE" and drops it. That is never what anyone
+        # wants, and it is indistinguishable in the UI from a tree that
+        # merely failed to render -- so it is treated as a failed load.
+        warnings.append(
+            "The saved recruiting knowledge base loaded with no categories, so it was "
+            "ignored and a fresh one seeded. It was NOT overwritten."
+        )
+        tree = None
+
     if tree is None:
         tree, _ = seed_recruiting_tree()
+        # Persist the seed ONLY when there is genuinely nothing saved.
+        # A file that exists but failed to load must never be
+        # overwritten by a seed -- that turns a bad read into permanent
+        # data loss, and a bad read is exactly when this path runs.
         try:
-            data_store.save_committed_tree(tree)
-        except RuntimeError as error:
-            warnings.append(f"Couldn't save the seeded tree: {error}")
+            if data_store.load_json_file(RECRUITING_TREE_PATH) is None:
+                data_store.save_committed_tree(tree)
+            else:
+                warnings.append(
+                    "Using a freshly seeded knowledge base for this session. The saved "
+                    "one is still in the repo, untouched -- it just could not be read."
+                )
+        except Exception as error:
+            warnings.append(f"Couldn't check or save the knowledge base: {error}")
 
     return Workspace(
         key=RECRUITING,
@@ -257,6 +290,13 @@ def build_player_analysis(team: Optional[str] = None) -> Workspace:
         )
 
     tree = _load_dvw_tree(source, warnings)
+    if tree is not None and not _has_branches(tree):
+        warnings.append(
+            "The saved event knowledge base loaded with no categories, so it was "
+            "ignored and a fresh one seeded. It was NOT overwritten."
+        )
+        tree = None
+
     if tree is None:
         tree, _ = seed_dvw_tree(source.schema)
         # Only PERSIST a seeded tree when it was seeded against real

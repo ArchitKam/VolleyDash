@@ -452,3 +452,37 @@ class TestParseOpponent:
     def test_an_opponent_whose_name_contains_vs_is_not_split_twice(self):
         """maxsplit=1: only the FIRST "vs" separates us from them."""
         assert store._parse_opponent("01_Nat_vs_A_vs_B_Club_-_Stats.csv") == "A vs B Club"
+
+
+# ──────────────────────────────────────────────────────────────
+# A tree must never load "empty" by accident
+# ──────────────────────────────────────────────────────────────
+
+def test_reading_the_other_worlds_knowledge_base_fails_loudly():
+    """
+    data.get("recruiting", {}) returned {} for an event knowledge base,
+    producing a tree with NO branches. That reached the router as "this
+    knowledge base has categories: NONE" and silently dropped every
+    category question -- an empty app that looks like a working one.
+    """
+    with pytest.raises(ValueError, match="not a recruiting knowledge base"):
+        store._tree_from_json_dict({"volley": {"Attack": {"metrics": {}}}})
+
+    with pytest.raises(ValueError, match="found"):
+        store._tree_from_json_dict({})
+
+
+def test_the_error_names_what_it_actually_found():
+    """So the reader learns WHICH file they pointed at, not just that it
+    was the wrong one."""
+    with pytest.raises(ValueError) as caught:
+        store._tree_from_json_dict({"volley": {}})
+    assert "'volley'" in str(caught.value) or "volley" in str(caught.value)
+
+
+def test_a_real_recruiting_payload_still_loads():
+    """Guards the guard: it must reject foreign payloads, not all of them."""
+    tree = store._tree_from_json_dict({
+        "recruiting": {"Attack": {"branch_node_id": "b1", "metrics": {}}}
+    })
+    assert any(n.label == "Attack" for n in tree.committed.values())

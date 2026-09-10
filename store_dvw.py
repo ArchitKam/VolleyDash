@@ -132,6 +132,15 @@ def tree_from_json_dict(data: dict, schema: SourceSchema) -> KnowledgeTree:
     root = tree.committed[tree.root_id]
     known_labels: List[str] = []
 
+    # See recruiting_data_store._tree_from_json_dict: the mirror of this
+    # guard. Reading the other world's file must fail loudly, not
+    # produce a branchless tree that looks merely empty.
+    if "volley" not in data:
+        raise ValueError(
+            "not an event knowledge base: expected a top-level 'volley' key, "
+            f"found {sorted(data) or 'nothing'}"
+        )
+
     for branch_label, branch_data in data.get("volley", {}).items():
         branch_id = branch_data.get("branch_node_id") or tree._new_id(branch_label)
         branch_node = Node(node_id=branch_id, label=branch_label,
