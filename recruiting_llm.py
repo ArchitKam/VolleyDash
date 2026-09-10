@@ -429,8 +429,7 @@ def _retrieve_candidate_metrics(query: str, tree: KnowledgeTree) -> Dict[str, An
     return {"candidates": candidates, "matched_aliases": hits, "fallback": False}
 
 
-def _build_router_system_prompt(candidates: List[str], tree: KnowledgeTree, known_games: List[str],
-                                supports_sets: bool = False) -> str:
+def _build_router_system_prompt(candidates: List[str], tree: KnowledgeTree, known_games: List[str]) -> str:
     descriptions = []
     for label in candidates:
         node = next((n for n in tree.committed.values()
@@ -439,22 +438,6 @@ def _build_router_system_prompt(candidates: List[str], tree: KnowledgeTree, know
         descriptions.append(f'- "{label}": {desc}')
     metrics_block = "\n".join(descriptions) if descriptions else "(no metrics available)"
     games_block = ", ".join(known_games) if known_games else "(no games loaded)"
-
-    # Only offered when the data can actually answer it. A Huddle CSV row
-    # is a player's totals for a whole match, so advertising a set filter
-    # against it would invite a question whose only honest answer is the
-    # match total -- the field is absent instead, and the model cannot
-    # ask for what it is never told about.
-    # Set joins the axis list only where it exists, for the same reason
-    # set_hint does: an axis the source has no column for is refused at
-    # execution time, and offering it here would manufacture that refusal.
-    axis_choices = '"Player"|"Game"|"Set"|"Metric"' if supports_sets else '"Player"|"Game"|"Metric"'
-
-    set_field_doc = (
-        '''
-- "set_hint": the set number if the coach named ONE specific set (e.g. "in set 3", "the third set" -> 3; "first two sets" -> null, since that is more than one set). Use null whenever no single set was named, which means "all sets together" -- the default. A match has at most 5 sets; never infer a set from a score.'''
-        if supports_sets else ""
-    )
 
     branch_lines = []
     for node in tree.committed.values():
@@ -484,18 +467,18 @@ Games currently loaded: {games_block}
 
 Rules for each action:
 - "player": the player's name/jersey exactly as the coach said it (e.g. "Sloan", "#7", "Sloan T."). Extract it as plain text ONLY -- do NOT try to resolve it to a real roster entry yourself, that happens downstream. Use null if no specific player was named (meaning "every player").
-- "game_hint": the opponent name exactly as mentioned (e.g. "Vegas Aces", "the Mavs game" -> "Mavs"), as plain text ONLY -- resolution against the real loaded games happens downstream. Use null if no specific game was named (meaning "every loaded game", e.g. "throughout all games").{set_field_doc}
+- "game_hint": the opponent name exactly as mentioned (e.g. "Vegas Aces", "the Mavs game" -> "Mavs"), as plain text ONLY -- resolution against the real loaded games happens downstream. Use null if no specific game was named (meaning "every loaded game", e.g. "throughout all games").
 - "title": a short human-readable title for this action's result.
 - "pipeline" (optional, omit or use [] for a plain lookup): an ORDERED list of operations to apply to the result before showing it. Order matters -- each operation runs on the output of the previous one. Every operation is one of:
-    {{"op": "slice", "axis": {axis_choices}, "keep": [<values to keep>]}}
+    {{"op": "slice", "axis": "Player"|"Game"|"Metric", "keep": [<values to keep>]}}
         -- restrict an axis to specific values, e.g. {{"op": "slice", "axis": "Player", "keep": ["Sloan"]}}
-    {{"op": "slice", "axis": {axis_choices}, "predicate": {{"metric": "<a metric name>", "op": ">"|">="|"<"|"<="|"=="|"!=" , "threshold": <number>, "decided_by_player": <player name or null>}}}}
+    {{"op": "slice", "axis": "Player"|"Game"|"Metric", "predicate": {{"metric": "<a metric name>", "op": ">"|">="|"<"|"<="|"=="|"!=" , "threshold": <number>, "decided_by_player": <player name or null>}}}}
         -- restrict an axis to only the rows where ANOTHER metric's value satisfies a comparison, e.g. "games where she had 10+ kills" -> {{"op": "slice", "axis": "Game", "predicate": {{"metric": "Kills", "op": ">=", "threshold": 10, "decided_by_player": null}}}}. Set "decided_by_player" to a specific player's name when ONE player's value should gate the axis for everyone (e.g. "games where SLOAN had 10+ kills" even when showing other players' data); leave it null when each player is judged by their OWN value.
-    {{"op": "reduce", "axis": {axis_choices}, "how": "mean"|"sum"|"min"|"max"|"count"|"median"}}
+    {{"op": "reduce", "axis": "Player"|"Game"|"Metric", "how": "mean"|"sum"|"min"|"max"|"count"|"median"}}
         -- collapse an axis into one aggregated value, e.g. "her average X across all games" -> {{"op": "reduce", "axis": "Game", "how": "mean"}}
-    {{"op": "rank", "axis": {axis_choices}, "descending": true|false, "limit": <integer or null>}}
+    {{"op": "rank", "axis": "Player"|"Game"|"Metric", "descending": true|false, "limit": <integer or null>}}
         -- order by value along an axis, e.g. "who has the highest X" -> {{"op": "rank", "axis": "Player", "descending": true, "limit": 1}}
-    {{"op": "compare", "axis": {axis_choices}, "how": "mean"|"sum"|"min"|"max"|"count"|"median", "mode": "difference"|"ratio"}}
+    {{"op": "compare", "axis": "Player"|"Game"|"Metric", "how": "mean"|"sum"|"min"|"max"|"count"|"median", "mode": "difference"|"ratio"}}
         -- express each value relative to a baseline (e.g. team average): "is she above team average" -> {{"op": "compare", "axis": "Player", "how": "mean", "mode": "difference"}}
   A predicate's "metric" can name a DIFFERENT metric than the action's own metric_of_interest/skill_group (e.g. slicing Passing by a Kills threshold) -- that's expected and handled downstream, just spell the metric name exactly as it appears in the metrics list above.
 - "unrecognized_terms": a list of any word/phrase from the question that has NO plausible mapping to a real metric, category, player, or game (gibberish, unrelated slang, a typo with no obvious correction). Leave it [] if everything mapped to something. This is STRUCTURED -- do not also try to explain it in "reasoning" prose, since free text there risks breaking JSON.
@@ -529,47 +512,6 @@ def _repair_pipeline(raw_pipeline: Any, notes: List[str], action_label: str) -> 
         return []
 
 
-_SET_NUMBER_RE = re.compile(r"(\d+)")
-
-#: Volleyball is best-of-five, so a set number outside 1..5 is a
-#: misreading rather than a real drill-down -- most often the LLM
-#: echoing a score ("set 25") or a game number.
-_MAX_SET = 5
-
-
-def _repair_set_hint(raw, notes: List[str]):
-    """
-    "set 3", "3rd set", "Set 3", 3 -> "Set 3"; anything else -> None.
-
-    Normalised HERE rather than downstream because the label is an
-    identity value on the Set axis: a hint that does not become exactly
-    the label the source emits would silently filter to nothing, which
-    reads as "she did not play" instead of "the filter did not match".
-
-    Out-of-range numbers are dropped WITH a note rather than clamped.
-    Clamping "set 25" to set 5 would answer a question nobody asked.
-    """
-    if raw is None:
-        return None
-    if isinstance(raw, bool):
-        return None
-    if isinstance(raw, (int, float)):
-        number = int(raw)
-    else:
-        if not isinstance(raw, str) or not raw.strip():
-            return None
-        match = _SET_NUMBER_RE.search(raw)
-        if match is None:
-            notes.append(f"Ignored set filter {raw!r} -- no set number in it.")
-            return None
-        number = int(match.group(1))
-
-    if not 1 <= number <= _MAX_SET:
-        notes.append(f"Ignored set filter {raw!r} -- a match has at most {_MAX_SET} sets.")
-        return None
-    return f"Set {number}"
-
-
 def _repair_unrecognized_terms(raw_terms: Any) -> List[str]:
     if not isinstance(raw_terms, list):
         return []
@@ -581,10 +523,6 @@ def _action_shape_key(action: Dict[str, Any]) -> tuple:
         action.get("metric_of_interest"),
         action.get("skill_group"),
         action.get("game_hint"),
-        # Part of the shape, not incidental: "Sloan's kills in set 1 and
-        # Azana's in set 2" are two different questions, and merging
-        # them would silently answer both with one set.
-        action.get("set_hint"),
         action.get("is_committed"),
         json.dumps(pipeline_to_dicts(action.get("pipeline") or []), sort_keys=True),
     )
@@ -658,17 +596,7 @@ def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[st
                 metric = None       # A hallucinated metric yields to a valid category
 
         if metric is None and skill_group is None:
-            # Name what was actually received. "no metric or category
-            # specified" is true of three different situations -- the
-            # model returned nothing, it returned a metric that is not
-            # committed, or it returned a category this tree has no
-            # branch for -- and they need completely different fixes.
-            # Without the values there is nothing to act on.
-            notes.append(
-                "Dropped an action with no metric or category specified "
-                f"(received metric_of_interest={raw_metric!r}, skill_group={raw_group!r}; "
-                f"this knowledge base has categories: {', '.join(sorted(valid_branches)) or 'NONE'})."
-            )
+            notes.append("Dropped an action with no metric or category specified.")
             continue
 
         player = action.get("player")
@@ -678,8 +606,6 @@ def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[st
         game_hint = action.get("game_hint")
         if not isinstance(game_hint, str) or not game_hint.strip():
             game_hint = None
-
-        set_hint = _repair_set_hint(action.get("set_hint"), notes)
 
         title = action.get("title")
         if not isinstance(title, str) or not title.strip():
@@ -692,7 +618,6 @@ def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[st
             "skill_group": skill_group,
             "player": player,
             "game_hint": game_hint,
-            "set_hint": set_hint,
             "title": title,
             "is_committed": metric in valid_metrics if metric else True,
             "pipeline": pipeline,
@@ -712,12 +637,9 @@ _RETRY_SUFFIX = (
 )
 
 
-def decompose_recruiting_query(query: str, tree: KnowledgeTree, known_games: List[str],
-                               supports_sets: bool = False) -> Dict[str, Any]:
+def decompose_recruiting_query(query: str, tree: KnowledgeTree, known_games: List[str]) -> Dict[str, Any]:
     retrieval = _retrieve_candidate_metrics(query, tree)
-    system_prompt = _build_router_system_prompt(
-        retrieval["candidates"], tree, known_games, supports_sets=supports_sets,
-    )
+    system_prompt = _build_router_system_prompt(retrieval["candidates"], tree, known_games)
 
     raw = call_llm(system_prompt, query)
     result = None

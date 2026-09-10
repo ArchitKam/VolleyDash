@@ -1,28 +1,7 @@
 streamlit
+pandas
 plotly
 streamlit-agraph
 openai
 requests
 pytest
-charset-normalizer
-
-# pydatavolley predates pandas 3 (Arrow-backed strings) and numpy 2
-# (stricter dtype promotion). Both fail deep inside the parser with
-# errors that name neither cause -- see dvw_patch.check_dependency_versions.
-#
-# The bounds are applied ONLY where they are installable. numpy<2 has no
-# wheels for Python 3.13+, so an unconditional pin makes pip try to build
-# it from source, fail, and take the WHOLE deploy down -- which leaves
-# Streamlit Cloud serving the previous build and looks like the push
-# never happened.
-#
-# So: on Python <=3.12 the bounds apply and play-by-play analysis works.
-# On 3.13+ the app still deploys with modern pandas/numpy, and the .dvw
-# workspace reports itself unavailable instead of breaking the app.
-# To enable .dvw on Streamlit Cloud, set the Python version to 3.12.
-pandas<3 ; python_version < "3.13"
-pandas   ; python_version >= "3.13"
-numpy<2  ; python_version < "3.13"
-numpy    ; python_version >= "3.13"
-
-pydatavolley

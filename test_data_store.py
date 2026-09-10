@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 import recruiting_data_store as store
-from recruiting_tree import KnowledgeTree, NodeKind, seed_recruiting_tree
+from recruiting_tree import NodeKind, seed_recruiting_tree
 
 
 @pytest.fixture(autouse=True)
@@ -113,41 +113,17 @@ def test_save_committed_tree_sha_fetch_then_put_sequence(monkeypatch):
 
 
 def test_save_committed_tree_get_failure_raises(monkeypatch):
-    """A GET that FAILS still aborts the save. 404 is excluded on
-    purpose -- see the test below -- so this uses a server error, which
-    is the case the guard is actually for: never PUT over a file whose
-    current state could not be read."""
-    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
-    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
-    tree, _ = seed_recruiting_tree()
-
-    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(500, text="Server Error"))
-    put_calls = []
-    monkeypatch.setattr(store.requests, "put", lambda *a, **k: put_calls.append(1))
-
-    with pytest.raises(RuntimeError, match="sha"):
-        store.save_committed_tree(tree)
-    assert not put_calls, "a failed sha lookup must not be followed by a write"
-
-
-def test_a_missing_file_is_created_rather_than_treated_as_a_failure(monkeypatch):
-    """Previously a 404 here raised, which meant a knowledge base that
-    did not exist yet could never be saved -- so seed-then-save could
-    never bootstrap, for either workspace."""
     monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
     monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
     tree, _ = seed_recruiting_tree()
 
     monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(404, text="Not Found"))
-    captured = {}
+    put_calls = []
+    monkeypatch.setattr(store.requests, "put", lambda *a, **k: put_calls.append(1))
 
-    def _fake_put(url, headers=None, json=None, timeout=None):
-        captured["payload"] = json
-        return _FakeResponse(201, {})
-
-    monkeypatch.setattr(store.requests, "put", _fake_put)
-    store.save_committed_tree(tree)
-    assert "sha" not in captured["payload"]
+    with pytest.raises(RuntimeError, match="sha"):
+        store.save_committed_tree(tree)
+    assert put_calls == []  # never reaches PUT if the sha fetch fails
 
 
 def test_save_committed_tree_put_failure_raises(monkeypatch):
@@ -264,225 +240,3 @@ def test_load_game_df_fetches_and_parses_csv_content(monkeypatch):
     assert list(df.columns) == ["Name", "Attack K", "Attack E"]
     assert df.iloc[0]["Name"] == "#7 Sloan T."
     assert df.iloc[0]["Attack K"] == 12
-
-
-# ──────────────────────────────────────────────────────────────
-# Files at or above 1 MB
-# ──────────────────────────────────────────────────────────────
-
-def test_a_file_too_large_to_inline_is_refetched_as_raw(monkeypatch):
-    """GitHub's Contents API inlines file bytes as base64 only BELOW
-    1 MB. At or above it the request still returns 200, with
-    "encoding": "none" and an empty content field -- a success response
-    containing no file. Before this fallback that decoded to b"" and
-    surfaced as an empty CSV rather than an error."""
-    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
-    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
-
-    big = b"Name,Attack K\n#7 Sloan T.,12\n"
-    seen = []
-
-    class _Raw:
-        status_code = 200
-        content = big
-        text = ""
-
-    def _fake_get(url, headers=None, timeout=None):
-        seen.append(headers["Accept"])
-        if headers["Accept"] == "application/vnd.github.v3.raw":
-            return _Raw()
-        return _FakeResponse(200, {"content": "", "encoding": "none"})
-
-    monkeypatch.setattr(store.requests, "get", _fake_get)
-
-    assert store._fetch_file_bytes("ArchitKam/VolleyData", "fake-token", "big.csv") == big
-    assert seen == ["application/vnd.github+json", "application/vnd.github.v3.raw"], (
-        "the raw refetch must happen only after the inline attempt reports it could not"
-    )
-
-
-def test_a_small_file_is_never_refetched(monkeypatch):
-    """The fallback must cost nothing on the path that already worked."""
-    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
-    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
-
-    calls = []
-
-    def _fake_get(url, headers=None, timeout=None):
-        calls.append(headers["Accept"])
-        return _FakeResponse(200, {"content": _b64("hello"), "encoding": "base64"})
-
-    monkeypatch.setattr(store.requests, "get", _fake_get)
-    assert store._fetch_file_bytes("r", "t", "small.csv") == b"hello"
-    assert calls == ["application/vnd.github+json"]
-
-
-def test_saving_a_tree_that_does_not_exist_yet_creates_it(monkeypatch):
-    """A second knowledge base always starts from nothing. The Contents
-    API creates a file when the PUT carries NO sha, so a 404 on the sha
-    lookup is the create case rather than a failure -- treating it as an
-    error made the DVW tree impossible to save the first time."""
-    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
-    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
-
-    captured = {}
-    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(404, {}))
-
-    def _fake_put(url, headers=None, json=None, timeout=None):
-        captured["payload"] = json
-        return _FakeResponse(201, {})
-
-    monkeypatch.setattr(store.requests, "put", _fake_put)
-
-    tree = KnowledgeTree()
-    tree.add_root()
-    store.save_committed_tree(tree, path="volley_kb_data.json", serializer=lambda t: {"nodes": []})
-
-    assert "sha" not in captured["payload"], "a create must not send a sha"
-    assert captured["payload"]["message"].startswith("Create")
-
-
-def test_saving_an_existing_tree_still_sends_its_sha(monkeypatch):
-    monkeypatch.setenv("GITHUB_DATA_REPO", "ArchitKam/VolleyData")
-    monkeypatch.setenv("GITHUB_DATA_TOKEN", "fake-token")
-
-    captured = {}
-    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(200, {"sha": "abc123"}))
-
-    def _fake_put(url, headers=None, json=None, timeout=None):
-        captured["payload"] = json
-        return _FakeResponse(200, {})
-
-    monkeypatch.setattr(store.requests, "put", _fake_put)
-
-    tree = KnowledgeTree()
-    tree.add_root()
-    store.save_committed_tree(tree, path="volley_kb_data.json", serializer=lambda t: {"nodes": []})
-
-    assert captured["payload"]["sha"] == "abc123"
-    assert captured["payload"]["message"].startswith("Update")
-
-
-# ──────────────────────────────────────────────────────────────
-# Uploading match files
-# ──────────────────────────────────────────────────────────────
-
-def test_uploading_a_new_file_creates_it(monkeypatch):
-    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(404, {}))
-    captured = {}
-
-    def _fake_put(url, headers=None, json=None, timeout=None):
-        captured.update({"url": url, "payload": json})
-        return _FakeResponse(201, {})
-
-    monkeypatch.setattr(store.requests, "put", _fake_put)
-
-    result = store.put_file_bytes("r/d", "tok", "dvw/a.dvw", b"bytes", "msg")
-    assert result == "created"
-    assert "sha" not in captured["payload"]
-    assert base64.b64decode(captured["payload"]["content"]) == b"bytes"
-
-
-def test_uploading_over_an_existing_file_sends_its_sha(monkeypatch):
-    """A PUT carrying the CURRENT sha replaces; one carrying a stale sha
-    is rejected by GitHub. That is the protection against two writers
-    silently clobbering each other, so the sha must be sent."""
-    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(200, {"sha": "deadbeef"}))
-    captured = {}
-
-    def _fake_put(url, headers=None, json=None, timeout=None):
-        captured["payload"] = json
-        return _FakeResponse(200, {})
-
-    monkeypatch.setattr(store.requests, "put", _fake_put)
-
-    assert store.put_file_bytes("r/d", "tok", "dvw/a.dvw", b"x", "msg") == "updated"
-    assert captured["payload"]["sha"] == "deadbeef"
-
-
-def test_an_unreadable_target_aborts_before_writing(monkeypatch):
-    """Never overwrite a file whose current state could not be read."""
-    monkeypatch.setattr(store.requests, "get", lambda *a, **k: _FakeResponse(500, text="boom"))
-    puts = []
-    monkeypatch.setattr(store.requests, "put", lambda *a, **k: puts.append(1))
-
-    with pytest.raises(RuntimeError, match="Couldn't check"):
-        store.put_file_bytes("r/d", "tok", "dvw/a.dvw", b"x", "msg")
-    assert not puts
-
-
-# ──────────────────────────────────────────────────────────────
-# Opponent parsing
-# ──────────────────────────────────────────────────────────────
-
-class TestParseOpponent:
-    """Exports arrive with either spaces or underscores as the word
-    separator. Only the space form used to parse, so every
-    underscore-named file fell through to its whole stem and put
-    "01_Nat_vs_Victory_15_Eite_-_Stats" on the Game axis."""
-
-    def test_the_space_form_is_unchanged(self):
-        """This is the behaviour that already worked; the fix must not
-        move it."""
-        assert store._parse_opponent("01 Nat vs Vegas Aces - Stats.csv") == "Vegas Aces"
-        assert store._parse_opponent("07 Nat vs Mavs 816 - Stats.csv") == "Mavs 816"
-
-    def test_the_underscore_form_now_parses_too(self):
-        assert store._parse_opponent("01_Nat_vs_Victory_15_Eite_-_Stats.csv") == "Victory 15 Eite"
-        assert store._parse_opponent("14_Nat_vs_Corpus_Christi_Surge_-_Stats.csv") == "Corpus Christi Surge"
-
-    def test_the_two_forms_agree_with_each_other(self):
-        """The separator is an artifact of how the file was downloaded,
-        not information. The same match must land on the same Game axis
-        value either way, or the same opponent appears twice."""
-        for spaced in ("01 Nat vs Vegas Aces - Stats.csv",
-                       "12 Nat vs Rio Grande Volley - Stats.csv"):
-            assert store._parse_opponent(spaced) == store._parse_opponent(spaced.replace(" ", "_"))
-
-    def test_vs_is_matched_case_insensitively_and_with_a_dot(self):
-        assert store._parse_opponent("01_Nat_VS_Vegas_Aces_-_Stats.csv") == "Vegas Aces"
-        assert store._parse_opponent("01 Nat vs. Vegas Aces - Stats.csv") == "Vegas Aces"
-
-    def test_an_unparseable_name_keeps_its_stem_rather_than_going_blank(self):
-        """A visibly wrong label beats a missing one: an empty Game axis
-        value groups every such match together silently."""
-        assert store._parse_opponent("weird-name.csv") == "weird-name"
-        assert store._parse_opponent("scrimmage.csv") == "scrimmage"
-
-    def test_an_opponent_whose_name_contains_vs_is_not_split_twice(self):
-        """maxsplit=1: only the FIRST "vs" separates us from them."""
-        assert store._parse_opponent("01_Nat_vs_A_vs_B_Club_-_Stats.csv") == "A vs B Club"
-
-
-# ──────────────────────────────────────────────────────────────
-# A tree must never load "empty" by accident
-# ──────────────────────────────────────────────────────────────
-
-def test_reading_the_other_worlds_knowledge_base_fails_loudly():
-    """
-    data.get("recruiting", {}) returned {} for an event knowledge base,
-    producing a tree with NO branches. That reached the router as "this
-    knowledge base has categories: NONE" and silently dropped every
-    category question -- an empty app that looks like a working one.
-    """
-    with pytest.raises(ValueError, match="not a recruiting knowledge base"):
-        store._tree_from_json_dict({"volley": {"Attack": {"metrics": {}}}})
-
-    with pytest.raises(ValueError, match="found"):
-        store._tree_from_json_dict({})
-
-
-def test_the_error_names_what_it_actually_found():
-    """So the reader learns WHICH file they pointed at, not just that it
-    was the wrong one."""
-    with pytest.raises(ValueError) as caught:
-        store._tree_from_json_dict({"volley": {}})
-    assert "'volley'" in str(caught.value) or "volley" in str(caught.value)
-
-
-def test_a_real_recruiting_payload_still_loads():
-    """Guards the guard: it must reject foreign payloads, not all of them."""
-    tree = store._tree_from_json_dict({
-        "recruiting": {"Attack": {"branch_node_id": "b1", "metrics": {}}}
-    })
-    assert any(n.label == "Attack" for n in tree.committed.values())

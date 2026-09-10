@@ -35,13 +35,12 @@ from recruiting_llm import (
 )
 from recruiting_operations import Operation, Rank, Slice, run_pipeline, describe_pipeline
 from recruiting_data_store import (
-    save_committed_tree, load_committed_tree,
+    GameInfo, get_games, load_game_df, save_committed_tree, load_committed_tree,
 )
 from recruiting_encoding import (
     EncodingAssignment, default_encoding, reconcile_encoding, resolve_clicked_point,
-    set_game_order, slot_options, unassigned_axes, render as render_encoded_panels,
+    set_game_order, slot_options, render as render_encoded_panels,
 )
-import workspace
 
 try:
     if "GROQ_API_KEY" not in os.environ and "GROQ_API_KEY" in st.secrets:
@@ -59,31 +58,8 @@ UMD_GOLD = "#B8860B"
 UMD_WHITE = "#FFFFFF"
 UMD_CYCLE = [UMD_RED, UMD_GOLD, UMD_WHITE]
 
-# Categorical hues for the Player axis, in fixed order, stepped for a DARK
-# chart surface. Validated against this app's actual surface (#000000)
-# rather than assumed:
-#
-#   PASS lightness band · PASS chroma floor · PASS CVD separation
-#   (worst adjacent dE 8.4) · PASS normal-vision floor (19.3) · PASS contrast
-#
-# The palette these replace failed outright: four near-identical reds and
-# golds plus white and grey, with red<->gold at CVD dE 6.6 -- two players a
-# colourblind reader could not tell apart -- and two entries with no chroma
-# at all, which read as "no series" rather than as a player.
-#
-# ORDER IS FIXED AND ASSIGNMENT IS BY ROSTER POSITION, not by who happens to
-# be on screen. A player keeps their colour when the filter changes; a chart
-# that repainted its survivors every time you unticked someone would make
-# colour meaningless as identity.
-PLAYER_PALETTE = [
-    "#3987e5",  # blue
-    "#d95926",  # orange
-    "#199e70",  # aqua
-    "#c98500",  # yellow
-    "#d55181",  # magenta
-    "#008300",  # green
-    "#9085e9",  # violet
-    "#e66767",  # red
+UMD_PLAYER_PALETTE = [
+    UMD_RED, UMD_GOLD, "#8B0000", "#DAA520", UMD_WHITE, "#A9A9A9", "#FF6B6B", "#F0C300",
 ]
 
 PLOTLY_BASE = dict(
@@ -103,39 +79,10 @@ hr {{ border-top: 1px solid {UMD_GOLD}; }}
 
 
 def get_player_color_map(known_player_pool: List[str]) -> dict:
-    """
-    Player -> colour, fixed by the player's position in the sorted ROSTER.
-
-    Sorted roster rather than the players in the current result, so a
-    player's colour is a property of the player and survives every
-    filter, question and re-run.
-
-    Eight hues is the validated set. A roster longer than eight reuses
-    them, which is a real limit rather than a hidden one: past eight
-    players ON ONE CHART two of them share a hue, and the Player Key is
-    what disambiguates. Filtering to the players being compared is the
-    intended way to work, and is why the key is checkboxes.
-    """
     return {
-        player: PLAYER_PALETTE[i % len(PLAYER_PALETTE)]
+        player: UMD_PLAYER_PALETTE[i % len(UMD_PLAYER_PALETTE)]
         for i, player in enumerate(sorted(known_player_pool))
     }
-
-
-def players_sharing_a_colour(players: List[str], color_map: dict) -> List[str]:
-    """Players on screen who collide with another on screen. Empty
-    almost always; non-empty is worth saying out loud rather than
-    letting two lines quietly look like one."""
-    seen: dict = {}
-    clashing = set()
-    for player in players:
-        colour = color_map.get(player)
-        if colour is None:
-            continue
-        if colour in seen:
-            clashing.update({seen[colour], player})
-        seen[colour] = player
-    return sorted(clashing)
 
 
 def _clear_chart_encoding_widgets() -> None:
@@ -163,44 +110,593 @@ QA_SAMPLE_QUESTIONS = [
 
 
 # ──────────────────────────────────────────────────────────────
-# QUERY LAYER -- now shared, see query.py
+# GAME SUPPORT 
 # ──────────────────────────────────────────────────────────────
-# Name resolution, pipeline preparation, action execution and the
-# tidy/consolidate step are format-agnostic: they work against a Source
-# and a KnowledgeTree, so the same code answers a question about a
-# Huddle export and about a play-by-play file. They were duplicated
-# here and in the DVW app; this is the surviving copy's import.
-#
-# Re-exported under the names app.py already published, because the test
-# suite reaches for app.X and moving the bodies out must not move the
-# names.
-from query import (  # noqa: E402,F401
-    _pipeline_referenced_metrics, _word_prefix_match, collect_leaf_labels,
-    consolidate_action_results, execute_query_actions, find_leaf_by_exact_label,
-    format_table as format_tidy_table, get_branches,
-    metric_format_pattern as get_metric_format_pattern, prepare_pipeline_frame,
-    resolve_game_hint, resolve_player_name, tidy_data,
-)
+
+def _word_prefix_match(hint_words: List[str], name_words: List[str]) -> bool:
+    return all(
+        any(hw == nw or nw.startswith(hw) or hw.startswith(nw) for nw in name_words)
+        for hw in hint_words
+    )
+
+
+def resolve_game_hint(hint: Optional[str], games: List[GameInfo]) -> List[GameInfo]:
+    if not hint or not hint.strip() or not games:
+        return []
+    needle = hint.strip().lower()
+
+    exact = [g for g in games if g.opponent.lower() == needle]
+    if exact:
+        return exact
+
+    substring = [g for g in games if needle in g.opponent.lower() or g.opponent.lower() in needle]
+    if substring:
+        return substring
+
+    needle_words = needle.split()
+    prefix_hits = [g for g in games if _word_prefix_match(needle_words, g.opponent.lower().split())]
+    if prefix_hits:
+        return prefix_hits
+
+    fuzzy = [g for g in games
+             if difflib.SequenceMatcher(None, needle, g.opponent.lower()).ratio() >= 0.75]
+    return fuzzy
+
 
 # ──────────────────────────────────────────────────────────────
-# SPEC EXECUTOR -- now shared, see evaluate_csv.py
+# SPEC EXECUTOR
 # ──────────────────────────────────────────────────────────────
-# Re-exported rather than re-implemented: these names were app.py's
-# public surface for the CSV evaluator and are imported by name across
-# the test suite, so moving the bodies out must not move the names.
-from evaluate_csv import (  # noqa: E402,F401
-    _ALLOWED_AST_NODES, _COLUMN_REF_PATTERN, _evaluate_spec_for_row,
-    _find_leaf_by_label, _resolve_token_value, EvalResult, RowPick,
-    build_substituted_expr, coerce_cell_to_float, compute_for_all_players,
-    evaluate_spec, pick_example_row, referenced_columns, run_category_query,
-    run_metric_query, safe_eval_arithmetic,
+
+_COLUMN_REF_PATTERN = re.compile(r"\[([^\[\]]+)\]")
+
+
+def coerce_cell_to_float(raw_value: Any) -> Optional[float]:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, float) and math.isnan(raw_value):
+        return None
+    if isinstance(raw_value, str) and not raw_value.strip():
+        return None
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def referenced_columns(spec: MetricSpec) -> List[str]:
+    payload = spec.payload
+    kind = payload.get("kind")
+    if kind == "column":
+        col = payload.get("column_ref")
+        return [col] if col else []
+    if kind == "formula":
+        return _COLUMN_REF_PATTERN.findall(payload.get("formula_expr", ""))
+    return []
+
+
+@dataclass
+class RowPick:
+    row: Optional[pd.Series]
+    row_label: Optional[str]
+    used_fallback_zero: bool
+    blank_columns: List[str] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+def pick_example_row(df: pd.DataFrame, referenced_cols: List[str],
+                     name_col: str = "Name") -> RowPick:
+    if name_col not in df.columns:
+        return RowPick(row=None, row_label=None, used_fallback_zero=False,
+                       error=f"'{name_col}' column not found in the CSV.")
+
+    player_rows = df[df[name_col].astype(str).str.strip().str.startswith("#")]
+    if player_rows.empty:
+        return RowPick(row=None, row_label=None, used_fallback_zero=False,
+                       error="No player rows found (all rows looked like team aggregates).")
+
+    missing_cols = [c for c in referenced_cols if c not in df.columns]
+    if missing_cols:
+        return RowPick(row=None, row_label=None, used_fallback_zero=False,
+                       error=f"Column(s) not found in CSV: {', '.join(missing_cols)}")
+
+    best_row = None
+    best_blanks: List[str] = []
+    for _, row in player_rows.iterrows():
+        blanks = [c for c in referenced_cols if coerce_cell_to_float(row[c]) is None]
+        if not blanks:
+            return RowPick(row=row, row_label=str(row[name_col]),
+                           used_fallback_zero=False, blank_columns=[])
+        if best_row is None or len(blanks) < len(best_blanks):
+            best_row, best_blanks = row, blanks
+
+    return RowPick(row=best_row, row_label=str(best_row[name_col]),
+                   used_fallback_zero=True, blank_columns=best_blanks)
+
+
+_ALLOWED_AST_NODES = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.UAdd, ast.USub,
 )
 
+
+def safe_eval_arithmetic(expr: str) -> float:
+    try:
+        parsed = ast.parse(expr, mode="eval")
+    except SyntaxError as e:
+        raise ValueError(f"Couldn't parse expression '{expr}': {e}")
+
+    for node in ast.walk(parsed):
+        if not isinstance(node, _ALLOWED_AST_NODES):
+            raise ValueError(
+                f"Expression '{expr}' contains a disallowed construct ({type(node).__name__})."
+            )
+        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
+            raise ValueError(f"Expression '{expr}' contains a non-numeric literal ({node.value!r}).")
+
+    return eval(compile(parsed, "<safe_eval_arithmetic>", "eval"))
+
+
+def build_substituted_expr(formula_expr: str, row: pd.Series,
+                           fallback_zero_cols: Optional[List[str]] = None) -> Tuple[str, List[str]]:
+    fallback_zero_cols = set(fallback_zero_cols or [])
+    missing: List[str] = []
+
+    def _replace(match: "re.Match") -> str:
+        col = match.group(1)
+        if col not in row.index:
+            missing.append(col)
+            return "0"
+        value = coerce_cell_to_float(row[col])
+        if value is None:
+            if col in fallback_zero_cols:
+                return "0.0"
+            missing.append(col)
+            return "0"
+        return repr(value)
+
+    substituted = _COLUMN_REF_PATTERN.sub(_replace, formula_expr)
+    return substituted, missing
+
+
+@dataclass
+class EvalResult:
+    value: Optional[float]
+    substituted_expr: Optional[str] = None
+    row_label: Optional[str] = None
+    missing_columns: List[str] = field(default_factory=list)
+    used_fallback_zero: bool = False
+    blank_columns: List[str] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+def _find_leaf_by_label(tree: KnowledgeTree, label: str):
+    for node in tree.committed.values():
+        if node.kind == NodeKind.LEAF and node.label == label:
+            return node
+    return None
+
+
+def _resolve_token_value(
+    token: str, row: pd.Series, tree: Optional[KnowledgeTree],
+    fallback_zero_cols: FrozenSet[str], _resolving: FrozenSet[str],
+) -> Tuple[Optional[float], Optional[str]]:
+    if token in row.index:
+        value = coerce_cell_to_float(row[token])
+        if value is not None:
+            return value, None
+        if token in fallback_zero_cols:
+            return 0.0, None
+        return None, f"'{token}' is blank for this row."
+
+    if tree is not None:
+        if token in _resolving:
+            return None, f"circular metric reference through '{token}'"
+        nested_node = _find_leaf_by_label(tree, token)
+        if nested_node is not None and nested_node.spec is not None:
+            nested = _evaluate_spec_for_row(
+                nested_node.spec, row, tree=tree,
+                fallback_zero_cols=fallback_zero_cols,
+                _resolving=_resolving | {token},
+            )
+            if nested.error:
+                return None, f"nested metric '{token}' failed: {nested.error}"
+            return nested.value, None
+
+    return None, f"'{token}' is not a real column or an existing metric"
+
+
+def _evaluate_spec_for_row(
+    spec: MetricSpec, row: pd.Series, tree: Optional[KnowledgeTree] = None,
+    fallback_zero_cols: Optional[FrozenSet[str]] = None,
+    _resolving: FrozenSet[str] = frozenset(),
+) -> EvalResult:
+    fallback_zero_cols = fallback_zero_cols or frozenset()
+    kind = spec.payload.get("kind")
+
+    if kind == "column":
+        col = spec.payload["column_ref"]
+        value, error = _resolve_token_value(col, row, tree, fallback_zero_cols, _resolving)
+        return EvalResult(
+            value=value, substituted_expr=f"[{col}] = {value if value is not None else 'N/A'}",
+            used_fallback_zero=bool(fallback_zero_cols and col in fallback_zero_cols),
+            blank_columns=list(fallback_zero_cols), error=error,
+        )
+
+    if kind == "formula":
+        expr = spec.payload["formula_expr"]
+        problems: List[str] = []
+
+        def _replace(match: "re.Match") -> str:
+            token = match.group(1)
+            value, error = _resolve_token_value(token, row, tree, fallback_zero_cols, _resolving)
+            if value is None:
+                problems.append(error or f"'{token}' unavailable")
+                return "0"
+            return repr(value)
+
+        substituted = _COLUMN_REF_PATTERN.sub(_replace, expr)
+        if problems:
+            return EvalResult(value=None, substituted_expr=substituted,
+                               missing_columns=problems, error="; ".join(problems))
+        try:
+            value = safe_eval_arithmetic(substituted)
+        except ZeroDivisionError:
+            return EvalResult(value=None, substituted_expr=substituted,
+                               error="Division by zero for this row.")
+        except ValueError as e:
+            return EvalResult(value=None, substituted_expr=substituted, error=str(e))
+        return EvalResult(
+            value=value, substituted_expr=substituted,
+            used_fallback_zero=bool(fallback_zero_cols), blank_columns=list(fallback_zero_cols),
+        )
+
+    return EvalResult(value=None, error=f"Unknown spec kind '{kind}'.")
+
+
+def evaluate_spec(spec: MetricSpec, df: pd.DataFrame, name_col: str = "Name",
+                   tree: Optional[KnowledgeTree] = None) -> EvalResult:
+    cols = referenced_columns(spec)
+    if not cols:
+        return EvalResult(value=None, error="Spec references no columns.")
+
+    raw_cols = [c for c in cols if c in df.columns]
+    pick = pick_example_row(df, raw_cols, name_col=name_col)
+    if pick.error:
+        return EvalResult(value=None, error=pick.error)
+
+    result = _evaluate_spec_for_row(
+        spec, pick.row, tree=tree,
+        fallback_zero_cols=frozenset(pick.blank_columns) if pick.used_fallback_zero else frozenset(),
+    )
+    result.row_label = pick.row_label
+    return result
+
+
+def compute_for_all_players(spec: MetricSpec, df: pd.DataFrame,
+                             tree: Optional[KnowledgeTree] = None,
+                             name_col: str = "Name") -> List[Tuple[str, EvalResult]]:
+    if name_col not in df.columns:
+        return []
+    player_rows = df[df[name_col].astype(str).str.strip().str.startswith("#")]
+    results = []
+    for _, row in player_rows.iterrows():
+        result = _evaluate_spec_for_row(spec, row, tree=tree, fallback_zero_cols=frozenset())
+        result.row_label = str(row[name_col])
+        results.append((str(row[name_col]), result))
+    return results
+
+
+def resolve_player_name(hint: Optional[str], known_names: List[str]) -> Optional[str]:
+    if not hint or not hint.strip() or not known_names:
+        return None
+    needle = hint.strip().lower()
+
+    exact = [n for n in known_names if n.strip().lower() == needle]
+    if exact:
+        return exact[0]
+
+    def _strip_jersey(name: str) -> str:
+        return re.sub(r"^#\S*\s*", "", name).strip().lower()
+
+    substring = [n for n in known_names
+                 if needle in _strip_jersey(n) or _strip_jersey(n) in needle]
+    if substring:
+        return substring[0]
+
+    fuzzy = [n for n in known_names
+             if difflib.SequenceMatcher(None, needle, _strip_jersey(n)).ratio() >= 0.75]
+    return fuzzy[0] if fuzzy else None
+
+
+def run_metric_query(
+    spec: MetricSpec, tree: KnowledgeTree,
+    game_dfs: List[Tuple[GameInfo, pd.DataFrame]],
+    player_name: Optional[str] = None, name_col: str = "Name",
+) -> pd.DataFrame:
+    records = []
+    for game, df in game_dfs:
+        for name, result in compute_for_all_players(spec, df, tree=tree, name_col=name_col):
+            if player_name is not None and name != player_name:
+                continue
+            records.append({
+                "Game": game.opponent, "Player": name,
+                "Value": result.value, "Note": result.error or "",
+            })
+    return pd.DataFrame(records, columns=["Game", "Player", "Value", "Note"])
+
+
+def run_category_query(
+    tree: KnowledgeTree, branch_node_id: str,
+    game_dfs: List[Tuple[GameInfo, pd.DataFrame]],
+    player_name: Optional[str] = None, name_col: str = "Name",
+) -> pd.DataFrame:
+    branch = tree.committed.get(branch_node_id)
+    if branch is None or branch.kind != NodeKind.BRANCH:
+        return pd.DataFrame(columns=["Metric", "Game", "Player", "Value", "Note"])
+
+    frames = []
+    for leaf_id in branch.children:
+        leaf = tree.committed.get(leaf_id)
+        if not leaf or leaf.kind != NodeKind.LEAF or not leaf.spec:
+            continue
+        leaf_df = run_metric_query(leaf.spec, tree, game_dfs, player_name=player_name, name_col=name_col)
+        leaf_df.insert(0, "Metric", leaf.label)
+        frames.append(leaf_df)
+
+    if not frames:
+        return pd.DataFrame(columns=["Metric", "Game", "Player", "Value", "Note"])
+    return pd.concat(frames, ignore_index=True)
+
+
+def _pipeline_referenced_metrics(pipeline: List[Operation]) -> Set[str]:
+    referenced: Set[str] = set()
+    for op in pipeline:
+        if isinstance(op, Slice) and op.predicate is not None:
+            referenced.add(op.predicate.metric)
+    return referenced
+
+
+def prepare_pipeline_frame(
+    result_df: pd.DataFrame, pipeline: List[Operation], primary_metric_label: Optional[str],
+    tree: KnowledgeTree, game_dfs: List[Tuple["GameInfo", pd.DataFrame]],
+) -> Tuple[pd.DataFrame, List[str]]:
+    notes: List[str] = []
+    if "Metric" not in result_df.columns:
+        result_df = result_df.copy()
+        result_df.insert(0, "Metric", primary_metric_label)
+
+    already_have = set(result_df["Metric"].dropna().unique())
+    extra_needed = _pipeline_referenced_metrics(pipeline) - already_have
+
+    frames = [result_df]
+    for extra_label in sorted(extra_needed):
+        extra_leaf = find_leaf_by_exact_label(tree, extra_label)
+        if extra_leaf is None or extra_leaf.spec is None:
+            notes.append(f"Pipeline referenced unknown metric '{extra_label}' -- skipped.")
+            continue
+        extra_df = run_metric_query(extra_leaf.spec, tree, game_dfs, player_name=None)
+        extra_df.insert(0, "Metric", extra_label)
+        frames.append(extra_df)
+
+    combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    return combined, notes
+
+
+# ──────────────────────────────────────────────────────────────
+# ACTION EXECUTION 
+# ──────────────────────────────────────────────────────────────
+
+def execute_query_actions(
+    decomposition: Dict[str, Any], tree: KnowledgeTree, known_games: List[GameInfo],
+    known_player_pool: List[str], selected_games: List[GameInfo],
+    player_filter: Optional[List[str]] = None,
+) -> List[dict]:
+    unrecognized_lower = {t.lower() for t in decomposition.get("unrecognized_terms", [])}
+    action_results = []
+    for action in decomposition.get("actions", []):
+        is_category = bool(action.get("skill_group"))
+        pipeline = action.get("pipeline") or []
+
+        if is_category:
+            branch_id = get_branches(tree).get(action["skill_group"])
+            if branch_id is None:
+                action_results.append({"action": action, "error": "Category no longer exists in committed tree."})
+                continue
+        else:
+            leaf = find_leaf_by_exact_label(tree, action.get("metric_of_interest"))
+            if leaf is None or leaf.spec is None:
+                raw_metric_name = action.get("metric_of_interest") or "Unknown Metric"
+                is_gibberish = raw_metric_name.strip().lower() in unrecognized_lower
+                action_results.append({
+                    "action": action,
+                    "status": "missing_metric",
+                    "raw_metric_name": raw_metric_name,
+                    "is_gibberish": is_gibberish,
+                })
+                continue
+
+        if player_filter:
+            resolved_player = player_filter[0] if len(player_filter) == 1 else None
+            multi_players = player_filter if len(player_filter) >= 2 else None
+        else:
+            raw_player = action.get("player")
+            if isinstance(raw_player, list):
+                resolved_players = []
+                seen_players = set()
+                for hint in raw_player:
+                    candidate = resolve_player_name(hint, known_player_pool)
+                    if candidate is not None and candidate not in seen_players:
+                        seen_players.add(candidate)
+                        resolved_players.append(candidate)
+                multi_players = resolved_players if len(resolved_players) >= 2 else None
+                resolved_player = resolved_players[0] if len(resolved_players) == 1 else None
+            else:
+                resolved_player = resolve_player_name(raw_player, known_player_pool)
+                multi_players = None
+
+        game_note = None
+        if action.get("game_hint"):
+            hint_games = resolve_game_hint(action["game_hint"], known_games)
+            if hint_games:
+                action_games = hint_games
+            else:
+                action_games = selected_games
+                game_note = f"Couldn't identify game '{action['game_hint']}' -- showing all selected games instead."
+        else:
+            action_games = selected_games
+
+        game_dfs = [(g, load_game_df(g.path)) for g in action_games]
+        fetch_player = None if (pipeline or multi_players or player_filter) else resolved_player
+        
+        if is_category:
+            result_df = run_category_query(tree, branch_id, game_dfs, player_name=fetch_player)
+        else:
+            result_df = run_metric_query(leaf.spec, tree, game_dfs, player_name=fetch_player)
+
+        pipeline_notes: List[str] = []
+        if pipeline or multi_players or player_filter:
+            pipeline = list(pipeline)
+            if player_filter:
+                pipeline = [op for op in pipeline if not (isinstance(op, Slice) and op.axis == "Player")]
+                pipeline.append(Slice(axis="Player", keep=player_filter))
+            else:
+                has_player_slice = any(isinstance(op, Slice) and op.axis == "Player" for op in pipeline)
+                if not has_player_slice:
+                    if multi_players:
+                        pipeline.append(Slice(axis="Player", keep=multi_players))
+                    elif resolved_player is not None:
+                        pipeline.append(Slice(axis="Player", keep=[resolved_player]))
+
+            has_metric_slice = any(isinstance(op, Slice) and op.axis == "Metric" for op in pipeline)
+            primary_metric = action.get("metric_of_interest")
+            if not is_category and primary_metric and not has_metric_slice:
+                pipeline.append(Slice(axis="Metric", keep=[primary_metric]))
+
+            combined_df, fetch_notes = prepare_pipeline_frame(
+                result_df, pipeline, action.get("metric_of_interest"), tree, game_dfs,
+            )
+            result_df, run_notes = run_pipeline(combined_df, pipeline)
+            pipeline_notes = fetch_notes + run_notes
+
+        action_results.append({
+            "action": action, "is_category": is_category, "resolved_player": resolved_player,
+            "action_games": action_games, "game_note": game_note, "result_df": result_df,
+            "pipeline": pipeline, "pipeline_notes": pipeline_notes,
+        })
+
+    return action_results
+
+
+# ──────────────────────────────────────────────────────────────
+# SEMANTIC TIDY DATA & CONSOLIDATION ENGINE
+# ──────────────────────────────────────────────────────────────
+
+def tidy_data(df: pd.DataFrame, metric_label: Optional[str] = None) -> pd.DataFrame:
+    tidy = df.copy()
+    if "Metric" not in tidy.columns:
+        tidy.insert(0, "Metric", metric_label)
+    tidy["Value"] = pd.to_numeric(tidy["Value"], errors="coerce")
+
+    wide = tidy.pivot(index=["Player", "Game"], columns="Metric", values="Value")
+    wide = wide.reset_index()
+    wide.columns.name = None
+    return wide.sort_values(["Player", "Game"], kind="stable").reset_index(drop=True)
+
+
+def consolidate_action_results(action_results: List[dict]) -> pd.DataFrame:
+    wide_frames = []
+
+    for item in action_results:
+        if "error" in item or item.get("status") == "missing_metric" or item.get("result_df") is None or item["result_df"].empty:
+            continue
+        
+        res_df = item["result_df"]
+        action = item["action"]
+        metric_label = action.get("metric_of_interest")
+        
+        wide = tidy_data(res_df, metric_label=metric_label)
+        if not wide.empty:
+            wide_frames.append(wide)
+
+    if not wide_frames:
+        return pd.DataFrame()
+
+    consolidated = wide_frames[0]
+    for next_frame in wide_frames[1:]:
+        metric_cols = [c for c in next_frame.columns if c not in ("Player", "Game")]
+        shared_cols = [c for c in metric_cols if c in consolidated.columns]
+        new_cols = [c for c in metric_cols if c not in consolidated.columns]
+
+        merge_cols = ["Player", "Game"] + shared_cols + new_cols
+        consolidated = pd.merge(
+            consolidated, next_frame[merge_cols], on=["Player", "Game"],
+            how="outer", suffixes=("", "_dup"),
+        )
+        for col in shared_cols:
+            dup_col = f"{col}_dup"
+            if dup_col in consolidated.columns:
+                consolidated[col] = consolidated[col].combine_first(consolidated[dup_col])
+                consolidated = consolidated.drop(columns=[dup_col])
+
+    return consolidated.sort_values(["Player", "Game"], kind="stable").reset_index(drop=True)
+
+
+def get_metric_format_pattern(tree: KnowledgeTree, metric_label: str) -> str:
+    node = find_leaf_by_exact_label(tree, metric_label)
+    lbl_lower = metric_label.lower()
+
+    if "%" in lbl_lower or "pct" in lbl_lower or "percentage" in lbl_lower or "efficiency" in lbl_lower or ("rate" in lbl_lower and "success" in lbl_lower):
+        return "{:.1%}"
+
+    if node and node.spec:
+        payload = node.spec.payload
+        if payload.get("kind") == "column":
+            col_ref = payload.get("column_ref")
+            col_spec = RECRUITING_COLUMN_SCHEMA.get(col_ref)
+            if col_spec:
+                if col_spec.type == ColumnType.PERCENTAGE:
+                    return "{:.1%}"
+                elif col_spec.type in (ColumnType.RATE, ColumnType.RATING):
+                    return "{:.2f}"
+                elif col_spec.type == ColumnType.COUNT:
+                    return "{:.0f}"
+
+    if "per set" in lbl_lower or "/s" in lbl_lower or "rating" in lbl_lower or "rtg" in lbl_lower:
+        return "{:.2f}"
+
+    return "{:.2f}"
+
+
+def format_tidy_table(df: pd.DataFrame, tree: KnowledgeTree):
+    """Applies semantic formatting and clean dash fills for missing values."""
+    format_dict = {}
+    for col in df.columns:
+        if col in ["Player", "Game"]:
+            continue
+        format_dict[col] = get_metric_format_pattern(tree, str(col))
+    return df.style.format(format_dict, na_rep="—")
 
 
 # ──────────────────────────────────────────────────────────────
 # HELPERS 
 # ──────────────────────────────────────────────────────────────
+
+def _safe_get_games() -> List[GameInfo]:
+    try:
+        return get_games()
+    except RuntimeError:
+        return []
+
+
+@st.cache_data
+def get_known_player_pool() -> List[str]:
+    pool: Set[str] = set()
+    for game in _safe_get_games():
+        df = load_game_df(game.path)
+        if "Name" in df.columns:
+            pool.update(n for n in df["Name"].astype(str) if n.strip().startswith("#"))
+    return sorted(pool)
+
 
 def get_branches(tree: KnowledgeTree) -> dict:
     root = tree.committed.get(tree.root_id)
@@ -305,31 +801,6 @@ def render_leaf_panel(tree: KnowledgeTree, leaf: Node, worked_example_df: Option
     path = " / ".join(tree.find_path(leaf.node_id, tree=tree.committed))
     st.markdown(f"#### 📊 {leaf.label}")
     st.caption(f"Path: {path}  ·  Authored by: {leaf.authored_by}")
-
-    # A metric can be unusable in two different ways, and conflating
-    # them was actively unhelpful: "no definition" is not the same
-    # statement as "a definition this data cannot satisfy", and only the
-    # second one can tell you what is actually missing.
-    if leaf.spec is None:
-        st.warning(
-            "This metric has no stored definition at all. It was saved in a format "
-            "this data source doesn't understand -- an event metric in the recruiting "
-            "world, or the reverse."
-        )
-        return
-
-    _errors = leaf.spec.validate()
-    if _errors:
-        st.error(
-            "**This metric can't be evaluated against the currently loaded matches.**\n\n"
-            + "\n".join(f"- {problem}" for problem in _errors)
-        )
-        st.caption(
-            "The definition itself is intact and still saved. This is about the DATA "
-            "loaded right now -- most often no matches loaded at all, in which case "
-            "every metric here will report the same thing."
-        )
-
     st.write(f"**Description:** {leaf.spec.description}")
 
     if worked_example_df is not None:
@@ -407,7 +878,7 @@ def render_node_panel(tree: KnowledgeTree, selected_id: Optional[str],
 
 
 @st.fragment
-def render_tree_graph(tree: KnowledgeTree, ws) -> None:
+def render_tree_graph(tree: KnowledgeTree, known_games: List[GameInfo]) -> None:
     col_l, col_mid, col_r = st.columns([1, 10, 1])
     with col_mid:
         ag_nodes, ag_edges = build_agraph_elements(tree, st.session_state.expanded_branches)
@@ -432,7 +903,7 @@ def render_tree_graph(tree: KnowledgeTree, ws) -> None:
             st.session_state.selected_node_id = clicked_node_id
         st.rerun(scope="fragment")
 
-    worked_example_df = ws.worked_example()
+    worked_example_df = load_game_df(known_games[0].path) if known_games else None
     render_node_panel(tree, st.session_state.selected_node_id, worked_example_df)
 
 
@@ -440,70 +911,25 @@ def render_tree_graph(tree: KnowledgeTree, ws) -> None:
 # SESSION INITIALIZATION
 # ──────────────────────────────────────────────────────────────
 
-# ── which data world are we in ────────────────────────────────
-# The workspace key is the ONLY thing the dropdown sets; everything
-# else -- source, knowledge base, where that base is saved, whether
-# per-set questions are answerable -- is rebuilt from it. Keeping one
-# switch means the UI can never end up showing one world's metrics
-# against another world's data.
-if "workspace_key" not in st.session_state:
-    st.session_state.workspace_key = workspace.RECRUITING
-
-
-@st.cache_resource(show_spinner="Loading data...")
-def _build_workspace(key: str, team: Optional[str]):
-    """Cached on the key so switching back and forth does not re-fetch
-    and re-parse. cache_resource rather than cache_data because a
-    Workspace holds a live Source with its own parsed frames, which
-    must not be copied per call."""
-    if key == workspace.PLAYER_ANALYSIS:
-        return workspace.build_player_analysis(team=team)
-    return workspace.build_recruiting()
-
-
-def _shorten_team(name: str) -> str:
-    """Imported lazily: the .dvw stack has a hard dependency bound and
-    importing it may fail, which must not matter to a workspace that
-    never touches it. Falls back to the full name."""
-    try:
-        from source_dvw import shorten_team_name
-
-        return shorten_team_name(name)
-    except Exception:
-        return name
-
-
-def _switch_workspace() -> None:
-    """
-    Everything scoped to the OLD world has to go.
-
-    A result set, a chart encoding, a player filter and a selected tree
-    node all name things -- players, games, metrics, node ids -- that
-    may not exist in the world being switched to. Leaving any of them
-    behind produces a chart drawn against the wrong roster or an editor
-    pointed at a node from another tree, which is worse than an empty
-    screen because it looks like an answer.
-
-    The list itself lives in workspace.py so it can be tested without
-    executing this script.
-    """
-    workspace.clear_scoped_state(st.session_state)
-
-
-def current_workspace():
-    return _build_workspace(
-        st.session_state.workspace_key, st.session_state.get("team_of_interest"),
-    )
-
-
-if "qa_trigger" not in st.session_state:
+if "tree" not in st.session_state:
+    loaded_tree = load_committed_tree()
+    _startup_save_warning = None
+    if loaded_tree is not None:
+        tree = loaded_tree
+    else:
+        tree, _ = seed_recruiting_tree()
+        try:
+            save_committed_tree(tree)
+        except RuntimeError as e:
+            _startup_save_warning = f"Couldn't save the seeded tree to VolleyData yet: {e}"
+    st.session_state.tree = tree
     st.session_state.new_metric_step = "describe"
     st.session_state.new_metric_worked_example = None
     st.session_state.pending_review_prefill = None
     st.session_state.pending_delete_node_id = None
     st.session_state.pending_delete_label = None
     st.session_state.editing_node_id = None
-    st.session_state.flash_message = None
+    st.session_state.flash_message = ("warning", _startup_save_warning) if _startup_save_warning else None
     st.session_state.qa_pending_query = None
     st.session_state.qa_trigger = False
     st.session_state.qa_last_decomposition = None
@@ -529,70 +955,17 @@ if st.session_state.qa_pending_query is not None:
     st.session_state.qa_pending_query = None
     st.session_state.qa_trigger = True
 
-# Computed once, before anything reads it: a workspace whose dependencies
-# cannot be imported must not appear in the picker, and a stale
-# workspace_key pointing at it must fall back rather than crash.
-_AVAILABLE_KEYS = workspace.available_keys()
-_DVW_REASON = workspace.dvw_unavailable_reason()
-if st.session_state.workspace_key not in _AVAILABLE_KEYS:
-    st.session_state.workspace_key = _AVAILABLE_KEYS[0]
-
-ws = current_workspace()
-tree = ws.tree
-source = ws.source
-known_games = ws.games()
-known_player_pool = ws.players()
-set_labels = ws.set_labels()
-
-# Kept in session state because the tree editor mutates it in place and
-# then asks the workspace to persist it.
-st.session_state.tree = tree
+tree = st.session_state.tree
+known_games = _safe_get_games()
+known_player_pool = get_known_player_pool()
 
 
 # ──────────────────────────────────────────────────────────────
 # HEADER + FLASH MESSAGE
 # ──────────────────────────────────────────────────────────────
 
-st.title("🏐 Volleyball Knowledge Base")
-
-_teams = ws.teams()
-col_source, col_team, col_caption = st.columns([2, 2, 4] if _teams else [2, 0.01, 6])
-with col_source:
-    st.selectbox(
-        "Data source",
-        _AVAILABLE_KEYS,
-        format_func=lambda key: workspace.LABELS[key],
-        key="workspace_key",
-        on_change=_switch_workspace,
-        help="Each source has its own knowledge base, because their metrics "
-             "are built from different things -- export columns on one side, "
-             "individual actions on the other.",
-    )
-if _teams:
-    with col_team:
-        # A .dvw records BOTH teams' actions, so "whose season is this"
-        # is a real question rather than a preference: it decides whose
-        # roster is analysed and which name each match is labelled with.
-        st.selectbox(
-            "Team", _teams, index=_teams.index(ws.team) if ws.team in _teams else 0,
-            key="team_of_interest", on_change=_switch_workspace,
-            format_func=_shorten_team,
-            help="Scouting files contain both teams. This picks whose players "
-                 "are analysed; the other side becomes the opponent.",
-        )
-with col_caption:
-    st.caption(ws.caption)
-    st.caption("Mixed-initiative knowledge base for volleyball analytics -- "
-               "mechanically validated with EUD staging & diffs.")
-
-for _warning in ws.warnings:
-    st.warning(_warning)
-
-if _DVW_REASON:
-    st.info(
-        "Play-by-play (.dvw) analysis is unavailable in this deployment, so only "
-        f"the recruiting source is listed. Reason: {_DVW_REASON}"
-    )
+st.title("🏐 Recruiting Knowledge Base")
+st.caption("Mixed-initiative knowledge base for volleyball analytics -- mechanically validated with EUD staging & diffs.")
 
 if st.session_state.flash_message:
     level, text = st.session_state.flash_message
@@ -609,24 +982,11 @@ tab_qa, tab_kb = st.tabs(["Ask a Question", "Knowledge Base"])
 with tab_qa:
     st.header("Ask a Question")
 
-    game_opponents = known_games
+    game_opponents = [g.opponent for g in known_games]
     st.multiselect(
         "Games (default scope for any part of your question that doesn't name one)",
         game_opponents, default=game_opponents, key="qa_games_multiselect",
     )
-
-    # Offered only where the data can answer it. The CSV source declares
-    # no Set axis (source.axes()), so this whole block is absent there
-    # rather than disabled -- a control that cannot do anything is worse
-    # than no control, because it implies the answer exists.
-    if set_labels:
-        st.multiselect(
-            "Sets (leave empty for all sets together)",
-            set_labels, default=[], key="qa_sets_multiselect",
-            help="Narrowing to a set also rebases per-set rates: "
-                 "\"Kills Per Set\" inside one set is that set's kills.",
-        )
-
 
     with st.form("qa_query_form", clear_on_submit=False):
         st.text_input(
@@ -654,46 +1014,25 @@ with tab_qa:
         else:
             try:
                 with st.spinner("Routing your question via local LLM..."):
-                    decomposition = decompose_recruiting_query(
-                        query_text, tree, game_opponents, supports_sets=ws.supports_sets,
-                    )
+                    decomposition = decompose_recruiting_query(query_text, tree, game_opponents)
             except LLMUnavailableError as e:
                 st.session_state.qa_last_decomposition = None
                 st.session_state.qa_action_results = []
                 st.session_state.flash_message = ("error", f"LLM unreachable -- can't process your question. ({e})")
                 st.rerun()
 
-            selected_games = [g for g in known_games
-                              if g in st.session_state.qa_games_multiselect]
+            selected_games = [g for g in known_games if g.opponent in st.session_state.qa_games_multiselect]
             action_results = execute_query_actions(
-                decomposition, tree, source, selected_games,
-                selected_sets=st.session_state.get("qa_sets_multiselect") or None,
+                decomposition, tree, known_games, known_player_pool, selected_games,
             )
 
             st.session_state.qa_last_decomposition = decomposition
             st.session_state.qa_action_results = action_results
             st.session_state.qa_encodings = {}
             _clear_chart_encoding_widgets()
-
-            # Pre-tick whoever the question named, so the Player Key opens
-            # on the player being asked about and comparing is one click --
-            # tick a second player -- instead of finding and ticking the
-            # subject first. Clearing to empty made the key say "no one
-            # selected" for a question that was explicitly about someone.
-            _asked_for = sorted({
-                r["resolved_player"] for r in action_results
-                if r.get("resolved_player")
-            })
+            st.session_state.qa_player_filter = []
             for _player in known_player_pool:
                 st.session_state.pop(f"qa_playerfilter_{_player}", None)
-            for _player in _asked_for:
-                st.session_state[f"qa_playerfilter_{_player}"] = True
-
-            # Recorded as ALREADY applied: the filter-changed check below
-            # compares the ticks against this and re-runs the whole query
-            # when they differ. Leaving it empty would make every question
-            # about a named player immediately re-run itself.
-            st.session_state.qa_player_filter = _asked_for
 
     decomposition = st.session_state.qa_last_decomposition
     action_results = st.session_state.qa_action_results
@@ -708,12 +1047,10 @@ with tab_qa:
         )
         if current_player_filter != st.session_state.qa_player_filter:
             st.session_state.qa_player_filter = current_player_filter
-            selected_games = [g for g in known_games
-                              if g in st.session_state.qa_games_multiselect]
+            selected_games = [g for g in known_games if g.opponent in st.session_state.qa_games_multiselect]
             action_results = execute_query_actions(
-                decomposition, tree, source, selected_games,
+                decomposition, tree, known_games, known_player_pool, selected_games,
                 player_filter=current_player_filter or None,
-                selected_sets=st.session_state.get("qa_sets_multiselect") or None,
             )
             st.session_state.qa_action_results = action_results
             st.session_state.qa_encodings = {}
@@ -748,20 +1085,7 @@ with tab_qa:
                 terms = ", ".join(f"'{t}'" for t in unrecognized)
                 st.error(f"I didn't recognize {terms} as a stat or metric -- did you mean something else?")
             else:
-                # Every action was dropped, or every one produced an
-                # empty frame. The router's own account of what it did
-                # is the only thing that can distinguish those, and it
-                # was previously discarded -- leaving a message that
-                # says something went wrong and nothing about what.
                 st.info("No computable values returned for this combination.")
-                _limitations = (decomposition.get("limitations") or "").strip()
-                if _limitations:
-                    st.caption(f"Why: {_limitations}")
-                if not decomposition.get("actions"):
-                    st.caption(
-                        "The question produced no runnable actions at all — so this is "
-                        "about how it was interpreted, not about the data."
-                    )
 
         # ── 2. IN-SITU KNOWLEDGE BASE AUTHORING (For missing metrics) ──
         for item in missing_metric_actions:
@@ -830,15 +1154,6 @@ with tab_qa:
                 col_charts, col_key = st.columns([5, 1])
                 with col_key:
                     st.markdown("**Player Key**")
-                    _clashing = players_sharing_a_colour(
-                        sorted(player_color_map), player_color_map
-                    )
-                    if _clashing:
-                        st.caption(
-                            f"⚠️ {len(_clashing)} players share a colour with another "
-                            "(eight distinct hues are available). Tick only the players "
-                            "you're comparing to keep them apart."
-                        )
                     st.caption(
                         "Check a player to re-run this question for just them "
                         "(check more to compare several) -- no new question needed."
@@ -917,11 +1232,7 @@ with tab_qa:
                             chosen_order = st.radio(
                                 f"{encoding.position} order", order_labels, index=order_labels.index(encoding.game_order),
                                 horizontal=True, key=f"qa_enc_gameorder_{i}",
-                                format_func=lambda o: (
-                                    "By value" if o == "value"
-                                    else ("Chronological" if encoding.position == "Game"
-                                          else "Natural order")
-                                ),
+                                format_func=lambda o: "By value" if o == "value" else "Original order",
                             )
                             if chosen_order != encoding.game_order:
                                 encoding = set_game_order(encoding, chosen_order)
@@ -931,20 +1242,8 @@ with tab_qa:
 
                         panels = render_encoded_panels(
                             result_df, encoding, value_col="Value",
-                            color_map=player_color_map,
-                            # The source's own game order is chronological;
-                            # the result frame's is not (rows come out
-                            # sorted by identity).
-                            position_order=known_games if encoding.position == "Game" else None,
+                            color_map=player_color_map
                         )
-                        _unassigned = unassigned_axes(result_df, encoding)
-                        if _unassigned:
-                            st.caption(
-                                f"⚠️ {', '.join(_unassigned)} varies here but isn't drawn — "
-                                "rows differing only on it land on the same bar. Assign it "
-                                "to a slot above, or narrow the question."
-                            )
-
                         if not panels:
                             st.info("No computable values for this chart.")
                             continue
@@ -973,32 +1272,10 @@ with tab_qa:
 # ──────────────────────────────────────────────────────────────
 
 with tab_kb:
-    st.header(f"Current Metrics Tree — {workspace.LABELS[ws.key]}")
+    st.header("Current Metrics Tree (committed)")
+    st.caption("Persisted to the private VolleyData repo — updates on merge.")
 
-    # WHICH knowledge base this is, stated rather than implied. The two
-    # trees deliberately share branch NAMES ("Attack", "Serve",
-    # "Receive"...) so the router's synonyms resolve a category question
-    # in either world -- which means they look nearly identical on
-    # screen. Naming the source, the file and the metric count is what
-    # makes "am I editing the right one" answerable at a glance instead
-    # of by opening a metric and inspecting its definition.
-    _leaf_count = sum(1 for _n in tree.committed.values() if _n.kind == NodeKind.LEAF)
-    st.caption(
-        f"{_leaf_count} committed metrics · saved to `{ws.tree_path}` in the private "
-        f"VolleyData repo · updates on merge"
-    )
-    if ws.supports_sets:
-        st.caption(
-            "Metrics here are **filters over individual actions** "
-            "(e.g. skill=Attack, evaluation_code=#), so they can be broken down by set."
-        )
-    else:
-        st.caption(
-            "Metrics here are **match-export columns and arithmetic over them**, "
-            "so there is no per-set detail to break down."
-        )
-
-    render_tree_graph(tree, ws)
+    render_tree_graph(tree, known_games)
 
     with st.expander("Delete a metric by name"):
         delete_query = st.text_input("Metric name (exact label)", key="delete_by_name_query")
@@ -1092,7 +1369,7 @@ with tab_kb:
             else:
                 expr = f"[{result.column_ref}]" if result.spec_kind == "column" else result.formula_expr
                 spec = build_spec_from_expr(expr, result.human_description, extra_valid_refs=collect_leaf_labels(tree))
-                worked_example_df = ws.worked_example()
+                worked_example_df = load_game_df(known_games[0].path) if known_games else None
                 st.session_state.new_metric_worked_example = (
                     evaluate_spec(spec, worked_example_df, tree=tree) if worked_example_df is not None else None
                 )
@@ -1137,7 +1414,7 @@ with tab_kb:
         if col_recompute.button("Recompute Worked Example"):
             spec = build_spec_from_expr(st.session_state.review_formula_expr, st.session_state.review_human_description,
                                          extra_valid_refs=collect_leaf_labels(tree))
-            worked_example_df = ws.worked_example()
+            worked_example_df = load_game_df(known_games[0].path) if known_games else None
             st.session_state.new_metric_worked_example = (
                 evaluate_spec(spec, worked_example_df, tree=tree) if worked_example_df is not None else None
             )
@@ -1211,7 +1488,7 @@ with tab_kb:
             tree.merge()
             flash_level, flash_text = "success", f"Merged {n_changes} change(s) into committed tree."
             try:
-                ws.save_tree(tree)
+                save_committed_tree(tree)
             except RuntimeError as e:
                 flash_level, flash_text = "warning", (
                     f"Merged for this session, but couldn't save to VolleyData "
