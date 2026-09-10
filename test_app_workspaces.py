@@ -362,3 +362,48 @@ class TestPlayerColours:
         clashing = app.players_sharing_a_colour(roster, colours)
         assert clashing, "10 players over 8 hues must collide"
         assert len(app.players_sharing_a_colour(roster[:8], colours)) == 0
+
+
+def test_a_branchless_tree_is_never_shipped_by_a_builder(monkeypatch):
+    """
+    "this knowledge base has categories: NONE" means the router was
+    handed a tree with no branches, so every category question resolved
+    against an empty list and was dropped.
+
+    The builder must repair that rather than pass it on -- and must NOT
+    overwrite the saved copy while doing so.
+    """
+    import recruiting_data_store as ds
+    import workspace
+    from recruiting_tree import KnowledgeTree, NodeKind
+
+    branchless = KnowledgeTree()
+    branchless.add_root()
+    assert not workspace._has_branches(branchless)
+
+    saved = []
+    monkeypatch.setattr(ds, "load_committed_tree", lambda: branchless)
+    monkeypatch.setattr(ds, "save_committed_tree", lambda *a, **k: saved.append(a))
+
+    ws = workspace.build_recruiting()
+    branches = [n.label for n in ws.tree.committed.values()
+                if n.kind == NodeKind.BRANCH and n.node_id != ws.tree.root_id]
+
+    assert branches, "a branchless tree must be replaced, not passed through"
+    assert "Serve" in branches
+    assert not saved, "a tree that merely failed to load must never be overwritten by a seed"
+    assert any("no categories" in w for w in ws.warnings)
+
+
+def test_the_workspace_cache_key_carries_a_build_marker():
+    """st.cache_resource entries outlive a script reload. When Streamlit
+    updates a running app in place, a Workspace built by the PREVIOUS
+    code stays cached and keeps being served -- indistinguishable from
+    "the fix didn't deploy". The build marker forces a rebuild."""
+    import inspect
+
+    import app
+
+    assert app.WORKSPACE_BUILD
+    params = inspect.signature(app._build_workspace.__wrapped__).parameters
+    assert "build" in params, "the build marker must be part of the cache key"

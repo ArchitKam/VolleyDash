@@ -450,8 +450,18 @@ if "workspace_key" not in st.session_state:
     st.session_state.workspace_key = workspace.RECRUITING
 
 
+#: Bumped whenever workspace CONSTRUCTION changes meaning. It is part of
+#: the cache key below, and it exists because st.cache_resource entries
+#: outlive a script reload: when Streamlit updates a running app in
+#: place, a Workspace built by the PREVIOUS version of this code stays
+#: cached and keeps being served. That is indistinguishable from "the
+#: fix didn't deploy" -- a shipped fix to tree loading kept being
+#: answered by a tree loaded before it existed.
+WORKSPACE_BUILD = "2026-09-10-branch-guard"
+
+
 @st.cache_resource(show_spinner="Loading data...")
-def _build_workspace(key: str, team: Optional[str]):
+def _build_workspace(key: str, team: Optional[str], build: str = WORKSPACE_BUILD):
     """Cached on the key so switching back and forth does not re-fetch
     and re-parse. cache_resource rather than cache_data because a
     Workspace holds a live Source with its own parsed frames, which
@@ -493,6 +503,7 @@ def _switch_workspace() -> None:
 def current_workspace():
     return _build_workspace(
         st.session_state.workspace_key, st.session_state.get("team_of_interest"),
+        WORKSPACE_BUILD,
     )
 
 
@@ -587,6 +598,44 @@ with col_caption:
 
 for _warning in ws.warnings:
     st.warning(_warning)
+
+# A tree with no categories answers every category question with
+# "categories: NONE" and drops it. The builders already refuse to
+# produce one, so reaching here means something upstream of them did --
+# and a silent, fully-functional-looking app that drops every question
+# is the worst possible way to find that out.
+_branch_labels = sorted(
+    node.label for node in tree.committed.values()
+    if node.kind == NodeKind.BRANCH and node.node_id != tree.root_id
+)
+if not _branch_labels:
+    st.error(
+        "**This knowledge base has no categories, so every question will be dropped.**\n\n"
+        f"Source: `{ws.key}` · tree file: `{ws.tree_path}`. Nothing has been overwritten. "
+        "Open Diagnostics below and send me what it says."
+    )
+
+with st.expander("🩺 Diagnostics", expanded=not _branch_labels):
+    # Deliberately the facts that have actually been needed to explain a
+    # failure, not a generic dump: which world, what loaded, how much.
+    import sys as _sys
+
+    _leaves = [n for n in tree.committed.values() if n.kind == NodeKind.LEAF]
+    st.code(
+        f"workspace     : {ws.key}\n"
+        f"tree file     : {ws.tree_path}\n"
+        f"categories    : {len(_branch_labels)}  {_branch_labels}\n"
+        f"metrics       : {len(_leaves)} ({sum(1 for n in _leaves if n.spec)} with a definition)\n"
+        f"games loaded  : {len(known_games)}\n"
+        f"players loaded: {len(known_player_pool)}\n"
+        f"fact rows     : {len(ws.source.facts())}\n"
+        f"sets          : {ws.set_labels() or '(none - this source has no Set axis)'}\n"
+        f"dvw available : {_DVW_REASON or 'yes'}\n"
+        f"python        : {_sys.version.split()[0]}\n"
+        f"pandas / numpy: {pd.__version__} / {__import__('numpy').__version__}\n"
+        f"warnings      : {ws.warnings or 'none'}",
+        language="text",
+    )
 
 if _DVW_REASON:
     st.info(
