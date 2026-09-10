@@ -270,3 +270,46 @@ def test_the_two_trees_really_are_different_trees():
     assert leaves(recruiting) != leaves(events)
     assert "Freeballs" in leaves(events), "an event-only metric"
     assert "Freeballs" not in leaves(recruiting)
+
+
+def test_an_unloadable_source_says_so_once_instead_of_35_times():
+    """
+    The failure mode that looks like a working app: files are reached
+    but parse to nothing, every metric then validates against an empty
+    schema and fails, and the UI reports 35 individually broken metrics
+    instead of one obvious problem.
+
+    Also pins that the two unusable states stay DISTINCT -- "no stored
+    definition" and "a definition this data cannot satisfy" are
+    different statements, and only the second can say what is missing.
+    """
+    import recruiting_data_store as ds
+    import store_dvw
+    from recruiting_tree import NodeKind
+    from source_dvw import DvwSource
+
+    empty = DvwSource([])
+    assert len(empty.facts()) == 0
+
+    raw = ds.load_json_file("volley_kb_data.json")
+    if raw is None:
+        pytest.skip("no saved event knowledge base to rebuild")
+
+    tree = store_dvw.tree_from_json_dict(raw, empty.schema)
+    leaves = [n for n in tree.committed.values() if n.kind == NodeKind.LEAF]
+
+    # The definitions survive -- this is about the DATA, not the tree.
+    assert leaves and all(n.spec is not None for n in leaves), (
+        "a metric must keep its definition even when the data cannot satisfy it"
+    )
+
+    failing = [n for n in leaves if n.spec.validate()]
+    assert failing, "event metrics cannot validate against a source with no actions"
+
+    problems = failing[0].spec.validate()
+    assert any("not a field in this source" in p for p in problems), (
+        "the message must name the missing field, not just report failure"
+    )
+    assert any("Available:" in p for p in problems), (
+        "and list what IS available, which is what reveals an empty source"
+    )

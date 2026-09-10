@@ -240,6 +240,22 @@ def build_player_analysis(team: Optional[str] = None) -> Workspace:
             tree, path=DVW_TREE_PATH, serializer=store_dvw.tree_to_json_dict,
         )
 
+    # Files present but nothing parsed out of them is the failure that
+    # looks like a working app: every metric validates against an empty
+    # schema, fails, and reports itself individually as broken. Said
+    # once, at the top, it is one obvious problem instead of 35.
+    try:
+        _fact_rows = len(source.facts())
+    except Exception as error:
+        _fact_rows = 0
+        warnings.append(f"Couldn't read the match files: {type(error).__name__}: {error}")
+    if paths and not _fact_rows:
+        warnings.append(
+            f"Found {len(paths)} match file(s) but read 0 actions out of them, so every "
+            "metric below will report that it cannot be evaluated. The files were "
+            "reached; parsing them produced nothing."
+        )
+
     tree = _load_dvw_tree(source, warnings)
     if tree is None:
         tree, _ = seed_dvw_tree(source.schema)

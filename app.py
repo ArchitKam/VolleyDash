@@ -254,17 +254,29 @@ def render_leaf_panel(tree: KnowledgeTree, leaf: Node, worked_example_df: Option
     st.markdown(f"#### 📊 {leaf.label}")
     st.caption(f"Path: {path}  ·  Authored by: {leaf.authored_by}")
 
-    # A leaf without a spec is a metric whose definition could not be
-    # rebuilt against the CURRENT source -- an event metric loaded into
-    # the CSV world, or one naming a (skill, code) these matches never
-    # contain. Say so and stop, rather than raising: one unusable node
-    # must not take down the whole Knowledge Base tab.
+    # A metric can be unusable in two different ways, and conflating
+    # them was actively unhelpful: "no definition" is not the same
+    # statement as "a definition this data cannot satisfy", and only the
+    # second one can tell you what is actually missing.
     if leaf.spec is None:
         st.warning(
-            "This metric has no definition that the loaded data can evaluate. "
-            "It was saved against different matches, or against the other data source."
+            "This metric has no stored definition at all. It was saved in a format "
+            "this data source doesn't understand -- an event metric in the recruiting "
+            "world, or the reverse."
         )
         return
+
+    _errors = leaf.spec.validate()
+    if _errors:
+        st.error(
+            "**This metric can't be evaluated against the currently loaded matches.**\n\n"
+            + "\n".join(f"- {problem}" for problem in _errors)
+        )
+        st.caption(
+            "The definition itself is intact and still saved. This is about the DATA "
+            "loaded right now -- most often no matches loaded at all, in which case "
+            "every metric here will report the same thing."
+        )
 
     st.write(f"**Description:** {leaf.spec.description}")
 
