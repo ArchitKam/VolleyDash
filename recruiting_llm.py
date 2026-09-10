@@ -658,7 +658,17 @@ def _validate_and_repair(result: Dict[str, Any], tree: KnowledgeTree) -> Dict[st
                 metric = None       # A hallucinated metric yields to a valid category
 
         if metric is None and skill_group is None:
-            notes.append("Dropped an action with no metric or category specified.")
+            # Name what was actually received. "no metric or category
+            # specified" is true of three different situations -- the
+            # model returned nothing, it returned a metric that is not
+            # committed, or it returned a category this tree has no
+            # branch for -- and they need completely different fixes.
+            # Without the values there is nothing to act on.
+            notes.append(
+                "Dropped an action with no metric or category specified "
+                f"(received metric_of_interest={raw_metric!r}, skill_group={raw_group!r}; "
+                f"this knowledge base has categories: {', '.join(sorted(valid_branches)) or 'NONE'})."
+            )
             continue
 
         player = action.get("player")

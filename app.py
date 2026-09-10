@@ -679,7 +679,20 @@ with tab_qa:
                 terms = ", ".join(f"'{t}'" for t in unrecognized)
                 st.error(f"I didn't recognize {terms} as a stat or metric -- did you mean something else?")
             else:
+                # Every action was dropped, or every one produced an
+                # empty frame. The router's own account of what it did
+                # is the only thing that can distinguish those, and it
+                # was previously discarded -- leaving a message that
+                # says something went wrong and nothing about what.
                 st.info("No computable values returned for this combination.")
+                _limitations = (decomposition.get("limitations") or "").strip()
+                if _limitations:
+                    st.caption(f"Why: {_limitations}")
+                if not decomposition.get("actions"):
+                    st.caption(
+                        "The question produced no runnable actions at all — so this is "
+                        "about how it was interpreted, not about the data."
+                    )
 
         # ── 2. IN-SITU KNOWLEDGE BASE AUTHORING (For missing metrics) ──
         for item in missing_metric_actions:
