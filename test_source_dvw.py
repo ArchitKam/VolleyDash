@@ -320,3 +320,32 @@ def test_every_match_label_is_opponent_plus_date_and_unique(maryland_source):
     # that makes the date load-bearing.
     penn = [label for label in labels if label.startswith("Penn State")]
     assert len(penn) == 2 and penn[0] != penn[1]
+
+
+@requires_corpus
+def test_matches_are_offered_in_the_order_they_were_played(maryland_source):
+    """
+    Was file order, on the assumption that date-named files sort into a
+    season. They do not: string order put "Nov 15" before "Nov 2" and
+    all of November before October, so every Game axis showed the season
+    shuffled.
+    """
+    from source_dvw import match_sort_key
+
+    labels = maryland_source.game_labels()
+    matches = {m.label: m.day for m in maryland_source.matches()}
+    keys = [match_sort_key(matches[label]) for label in labels]
+    assert keys == sorted(keys), labels
+    assert labels[0].endswith("(Oct 3)"), labels[0]
+    assert labels[-1].endswith("(Nov 28)"), labels[-1]
+
+
+def test_match_sort_key_orders_by_real_date_not_string():
+    from source_dvw import match_sort_key
+
+    assert match_sort_key("10/03/2025") < match_sort_key("11/02/2025")
+    assert match_sort_key("11/02/2025") < match_sort_key("11/15/2025")
+    # An unparseable date sorts LAST, so one bad file cannot claim to be
+    # the opening match of the season.
+    assert match_sort_key("garbage") > match_sort_key("12/31/2025")
+    assert match_sort_key(None) > match_sort_key("12/31/2025")

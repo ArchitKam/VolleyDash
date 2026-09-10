@@ -39,7 +39,7 @@ class EncodingAssignment:
     position: Optional[str] = None   # one of AXES, or None
     color: Optional[str] = None
     facet: Optional[str] = None
-    game_order: str = "value"        # "value" (sort by Value) or "original" (row order)
+    game_order: str = "value"        # "value" (sort by Value) or "original" (natural order)
 
 
 def varying_axes(df: pd.DataFrame) -> List[str]:
@@ -61,10 +61,17 @@ def default_encoding(df: pd.DataFrame) -> EncodingAssignment:
     dropdowns.
     """
     axes = varying_axes(df)
+    position = "Game" if "Game" in axes else None
     return EncodingAssignment(
-        position="Game" if "Game" in axes else None,
+        position=position,
         color="Player" if "Player" in axes else None,
         facet="Metric" if "Metric" in axes else None,
+        # A season on an x-axis reads in the order it was played. Sorting
+        # games by value turns a timeline into a ranking and destroys the
+        # one thing a Game axis is for -- you cannot see a run of form in
+        # a bar chart sorted by height. Value order stays available; it
+        # is just no longer the default for Game.
+        game_order="original" if position == "Game" else "value",
     )
 
 
@@ -228,7 +235,8 @@ def resolve_clicked_point(points: List[dict], encoding: EncodingAssignment, fig:
 
 def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Value",
            color_map: Optional[Dict[str, str]] = None,
-           highlights: Optional[List[Tuple[str, str, Dict[str, Optional[str]]]]] = None) -> List[Tuple[str, go.Figure]]:
+           highlights: Optional[List[Tuple[str, str, Dict[str, Optional[str]]]]] = None,
+           position_order: Optional[List[str]] = None) -> List[Tuple[str, go.Figure]]:
     """
     Renders df per encoding into one or more Plotly figures -- one entry
     normally, one per distinct facet value if encoding.facet is set.
@@ -252,7 +260,15 @@ def render(df: pd.DataFrame, encoding: EncodingAssignment, value_col: str = "Val
 
     if encoding.position is not None:
         if encoding.game_order == "original":
-            order_values = list(dict.fromkeys(valid[encoding.position]))
+            # position_order is the CANONICAL order from the source
+            # (chronological, for games). Falling back to the frame's row
+            # order is not equivalent: the evaluator emits rows sorted by
+            # identity, so "original" without this was alphabetical --
+            # which put Nov 15 before Nov 2 and looked deliberate.
+            present = set(valid[encoding.position])
+            order_values = [v for v in (position_order or []) if v in present]
+            order_values += [v for v in dict.fromkeys(valid[encoding.position])
+                             if v not in set(order_values)]
             valid[encoding.position] = pd.Categorical(valid[encoding.position], categories=order_values, ordered=True)
             valid = valid.sort_values(encoding.position)
         else:  # "value" -- highest first, so a Rank'd result's order carries straight into the chart

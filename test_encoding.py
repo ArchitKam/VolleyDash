@@ -353,3 +353,59 @@ def test_resolve_clicked_point_uses_panel_metric_when_metric_not_an_axis():
     points = [{"curve_number": curve_number, "x": "Mavs 816", "y": 7}]
     result = resolve_clicked_point(points, enc, fig, panel_metric="Aces Per Set")
     assert result["metric"] == "Aces Per Set"
+
+
+# ── chronological Game axis ────────────────────────────────────
+
+class TestGameAxisOrder:
+    """A season on an x-axis reads in the order it was played. Sorting
+    games by value turns a timeline into a ranking, and you cannot see a
+    run of form in a bar chart sorted by height."""
+
+    @staticmethod
+    def _frame():
+        import pandas as pd
+        return pd.DataFrame([
+            {"Game": "Ohio State (Nov 8)", "Player": "A", "Value": 5.0},
+            {"Game": "Rutgers (Oct 3)", "Player": "A", "Value": 1.0},
+            {"Game": "Illinois (Oct 10)", "Player": "A", "Value": 9.0},
+        ])
+
+    def test_a_game_axis_defaults_to_natural_order_not_value(self):
+        from recruiting_encoding import default_encoding
+
+        encoding = default_encoding(self._frame())
+        assert encoding.position == "Game"
+        assert encoding.game_order == "original"
+
+    def test_the_canonical_order_wins_over_the_frames_row_order(self):
+        """The evaluator emits rows sorted by IDENTITY, so "original"
+        without a canonical order was alphabetical -- which put Nov 8
+        before Oct 3 and looked deliberate."""
+        from recruiting_encoding import default_encoding, render
+
+        frame = self._frame()
+        season = ["Rutgers (Oct 3)", "Illinois (Oct 10)", "Ohio State (Nov 8)"]
+        panels = render(frame, default_encoding(frame), position_order=season)
+        assert panels
+        drawn = list(panels[0][1].data[0].x)
+        assert drawn == season, drawn
+
+    def test_a_game_missing_from_the_canonical_order_is_still_drawn(self):
+        """An unknown game must not silently vanish from the chart."""
+        from recruiting_encoding import default_encoding, render
+
+        frame = self._frame()
+        panels = render(frame, default_encoding(frame),
+                        position_order=["Rutgers (Oct 3)"])
+        drawn = list(panels[0][1].data[0].x)
+        assert drawn[0] == "Rutgers (Oct 3)"
+        assert set(drawn) == set(frame["Game"]), "every game must appear"
+
+    def test_by_value_still_available(self):
+        from recruiting_encoding import default_encoding, render, set_game_order
+
+        frame = self._frame()
+        encoding = set_game_order(default_encoding(frame), "value")
+        panels = render(frame, encoding)
+        assert list(panels[0][1].data[0].y) == [9.0, 5.0, 1.0]

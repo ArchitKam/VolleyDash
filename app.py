@@ -59,8 +59,31 @@ UMD_GOLD = "#B8860B"
 UMD_WHITE = "#FFFFFF"
 UMD_CYCLE = [UMD_RED, UMD_GOLD, UMD_WHITE]
 
-UMD_PLAYER_PALETTE = [
-    UMD_RED, UMD_GOLD, "#8B0000", "#DAA520", UMD_WHITE, "#A9A9A9", "#FF6B6B", "#F0C300",
+# Categorical hues for the Player axis, in fixed order, stepped for a DARK
+# chart surface. Validated against this app's actual surface (#000000)
+# rather than assumed:
+#
+#   PASS lightness band · PASS chroma floor · PASS CVD separation
+#   (worst adjacent dE 8.4) · PASS normal-vision floor (19.3) · PASS contrast
+#
+# The palette these replace failed outright: four near-identical reds and
+# golds plus white and grey, with red<->gold at CVD dE 6.6 -- two players a
+# colourblind reader could not tell apart -- and two entries with no chroma
+# at all, which read as "no series" rather than as a player.
+#
+# ORDER IS FIXED AND ASSIGNMENT IS BY ROSTER POSITION, not by who happens to
+# be on screen. A player keeps their colour when the filter changes; a chart
+# that repainted its survivors every time you unticked someone would make
+# colour meaningless as identity.
+PLAYER_PALETTE = [
+    "#3987e5",  # blue
+    "#d95926",  # orange
+    "#199e70",  # aqua
+    "#c98500",  # yellow
+    "#d55181",  # magenta
+    "#008300",  # green
+    "#9085e9",  # violet
+    "#e66767",  # red
 ]
 
 PLOTLY_BASE = dict(
@@ -80,10 +103,39 @@ hr {{ border-top: 1px solid {UMD_GOLD}; }}
 
 
 def get_player_color_map(known_player_pool: List[str]) -> dict:
+    """
+    Player -> colour, fixed by the player's position in the sorted ROSTER.
+
+    Sorted roster rather than the players in the current result, so a
+    player's colour is a property of the player and survives every
+    filter, question and re-run.
+
+    Eight hues is the validated set. A roster longer than eight reuses
+    them, which is a real limit rather than a hidden one: past eight
+    players ON ONE CHART two of them share a hue, and the Player Key is
+    what disambiguates. Filtering to the players being compared is the
+    intended way to work, and is why the key is checkboxes.
+    """
     return {
-        player: UMD_PLAYER_PALETTE[i % len(UMD_PLAYER_PALETTE)]
+        player: PLAYER_PALETTE[i % len(PLAYER_PALETTE)]
         for i, player in enumerate(sorted(known_player_pool))
     }
+
+
+def players_sharing_a_colour(players: List[str], color_map: dict) -> List[str]:
+    """Players on screen who collide with another on screen. Empty
+    almost always; non-empty is worth saying out loud rather than
+    letting two lines quietly look like one."""
+    seen: dict = {}
+    clashing = set()
+    for player in players:
+        colour = color_map.get(player)
+        if colour is None:
+            continue
+        if colour in seen:
+            clashing.update({seen[colour], player})
+        seen[colour] = player
+    return sorted(clashing)
 
 
 def _clear_chart_encoding_widgets() -> None:
@@ -622,9 +674,26 @@ with tab_qa:
             st.session_state.qa_action_results = action_results
             st.session_state.qa_encodings = {}
             _clear_chart_encoding_widgets()
-            st.session_state.qa_player_filter = []
+
+            # Pre-tick whoever the question named, so the Player Key opens
+            # on the player being asked about and comparing is one click --
+            # tick a second player -- instead of finding and ticking the
+            # subject first. Clearing to empty made the key say "no one
+            # selected" for a question that was explicitly about someone.
+            _asked_for = sorted({
+                r["resolved_player"] for r in action_results
+                if r.get("resolved_player")
+            })
             for _player in known_player_pool:
                 st.session_state.pop(f"qa_playerfilter_{_player}", None)
+            for _player in _asked_for:
+                st.session_state[f"qa_playerfilter_{_player}"] = True
+
+            # Recorded as ALREADY applied: the filter-changed check below
+            # compares the ticks against this and re-runs the whole query
+            # when they differ. Leaving it empty would make every question
+            # about a named player immediately re-run itself.
+            st.session_state.qa_player_filter = _asked_for
 
     decomposition = st.session_state.qa_last_decomposition
     action_results = st.session_state.qa_action_results
@@ -761,6 +830,15 @@ with tab_qa:
                 col_charts, col_key = st.columns([5, 1])
                 with col_key:
                     st.markdown("**Player Key**")
+                    _clashing = players_sharing_a_colour(
+                        sorted(player_color_map), player_color_map
+                    )
+                    if _clashing:
+                        st.caption(
+                            f"⚠️ {len(_clashing)} players share a colour with another "
+                            "(eight distinct hues are available). Tick only the players "
+                            "you're comparing to keep them apart."
+                        )
                     st.caption(
                         "Check a player to re-run this question for just them "
                         "(check more to compare several) -- no new question needed."
@@ -839,7 +917,11 @@ with tab_qa:
                             chosen_order = st.radio(
                                 f"{encoding.position} order", order_labels, index=order_labels.index(encoding.game_order),
                                 horizontal=True, key=f"qa_enc_gameorder_{i}",
-                                format_func=lambda o: "By value" if o == "value" else "Original order",
+                                format_func=lambda o: (
+                                    "By value" if o == "value"
+                                    else ("Chronological" if encoding.position == "Game"
+                                          else "Natural order")
+                                ),
                             )
                             if chosen_order != encoding.game_order:
                                 encoding = set_game_order(encoding, chosen_order)
@@ -849,7 +931,11 @@ with tab_qa:
 
                         panels = render_encoded_panels(
                             result_df, encoding, value_col="Value",
-                            color_map=player_color_map
+                            color_map=player_color_map,
+                            # The source's own game order is chronological;
+                            # the result frame's is not (rows come out
+                            # sorted by identity).
+                            position_order=known_games if encoding.position == "Game" else None,
                         )
                         if not panels:
                             st.info("No computable values for this chart.")

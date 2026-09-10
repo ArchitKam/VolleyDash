@@ -229,6 +229,31 @@ def set_label(number: Optional[object]) -> str:
         return ""
 
 
+def match_sort_key(day: Optional[str]) -> tuple:
+    """
+    Sortable key for a match date, "MM/DD/YYYY" -> (2025, 11, 15).
+
+    Needed because the obvious orderings are both WRONG for a season:
+    sorting the LABELS puts "Nov 15" before "Nov 2" and all of November
+    before October, and sorting the FILENAMES does the same thing for
+    the same reason. A season on an x-axis has to run in the order it
+    was played.
+
+    An unparseable date sorts last rather than first, so one bad file
+    cannot silently claim to be the opening match.
+    """
+    if not day or not isinstance(day, str):
+        return (9999, 99, 99)
+    parts = day.strip().split("/")
+    if len(parts) != 3:
+        return (9999, 99, 99)
+    try:
+        month, dom, year = int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        return (9999, 99, 99)
+    return (year, month, dom)
+
+
 def set_sort_key(label: str) -> tuple:
     """Orders "Set 10" after "Set 9" rather than between "Set 1" and
     "Set 2", which is what sorting the strings would do."""
@@ -372,11 +397,16 @@ class DvwSource(Source):
         return self._matches
 
     def game_labels(self) -> List[str]:
-        """File order rather than alphabetical: the corpus is named by
-        date, so this keeps a season roughly chronological in the game
-        picker and along a chart's Game axis."""
+        """
+        CHRONOLOGICAL, by the date inside each file.
+
+        Was file order, on the assumption that date-named files sort
+        into a season. They do not: string order put Nov 15 before Nov 2
+        and the whole of November before October, so every Game axis
+        showed the season shuffled.
+        """
         seen, labels = set(), []
-        for match in self.matches():
+        for match in sorted(self.matches(), key=lambda m: match_sort_key(m.day)):
             if match.label not in seen:
                 seen.add(match.label)
                 labels.append(match.label)

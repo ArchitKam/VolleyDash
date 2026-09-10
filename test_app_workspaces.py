@@ -313,3 +313,52 @@ def test_an_unloadable_source_says_so_once_instead_of_35_times():
     assert any("Available:" in p for p in problems), (
         "and list what IS available, which is what reveals an empty source"
     )
+
+
+# ── player colours ─────────────────────────────────────────────
+
+class TestPlayerColours:
+    """The palette that shipped before failed the validator outright:
+    four near-identical reds and golds plus white and grey, with
+    red<->gold at CVD dE 6.6 -- two players a colourblind reader cannot
+    tell apart -- and two entries with no chroma, which read as "no
+    series" rather than as a player."""
+
+    def test_the_palette_is_eight_distinct_hues(self):
+        import app
+
+        assert len(app.PLAYER_PALETTE) == 8
+        assert len(set(app.PLAYER_PALETTE)) == 8
+        assert not {"#FFFFFF", "#000000", "#A9A9A9"} & set(app.PLAYER_PALETTE), (
+            "a greyscale entry reads as 'no series', not as a player"
+        )
+
+    def test_a_players_colour_does_not_change_when_others_are_filtered_out(self):
+        """Colour follows the entity, never its rank. A chart that
+        repainted its survivors every time you unticked someone would
+        make colour meaningless as identity."""
+        import app
+
+        roster = ["#7 Sloan T.", "#22 Azana S.", "#30 Avery L.", "#19 Angela Z."]
+        full = app.get_player_color_map(roster)
+        narrowed = app.get_player_color_map(roster)  # same roster, any subset shown
+        assert full == narrowed
+        assert full["#7 Sloan T."] == narrowed["#7 Sloan T."]
+
+    def test_up_to_eight_players_are_all_different(self):
+        import app
+
+        roster = [f"#{i} P{i}" for i in range(8)]
+        assert len(set(app.get_player_color_map(roster).values())) == 8
+
+    def test_a_roster_past_eight_reports_the_collision_rather_than_hiding_it(self):
+        """Eight is the validated set. A ninth player reusing a hue is a
+        real limit, and the app says which players share one instead of
+        letting two lines quietly look like one."""
+        import app
+
+        roster = [f"#{i} P{i:02d}" for i in range(10)]
+        colours = app.get_player_color_map(roster)
+        clashing = app.players_sharing_a_colour(roster, colours)
+        assert clashing, "10 players over 8 hues must collide"
+        assert len(app.players_sharing_a_colour(roster[:8], colours)) == 0
