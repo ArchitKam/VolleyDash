@@ -1,15 +1,32 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-.streamlit/secrets.toml
-.env
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# This is the public code repo -- real data belongs only in the private
-# VolleyData repo, never here, not even by accident.
-*.csv
-recruiting_kb_data.json
-# Explicitly by name too, not just by pattern: it has its own nested .git
-# (from being pushed to VolleyData directly), so a plain `git add -A`
-# stages it as an embedded-repo gitlink -- *.csv/recruiting_kb_data.json
-# patterns above don't catch that, since a gitlink isn't matched as a file.
-VolleyData_upload/
+node_modules
+dist
+dist-ssr
+.output
+.vinxi
+.tanstack/**
+.nitro
+*.local
+
+# Wrangler / Cloudflare
+.wrangler/
+.dev.vars
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
